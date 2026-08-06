@@ -1,0 +1,10 @@
+# Связи между моделями, которые LLM сможет использовать через MDL
+# Документация: https://docs.getwren.ai/oss/reference/mdl
+#
+# Пример:
+#
+# relationships:
+#   - name: orders_to_customers
+#     models: [orders, customers]
+#     joinType: many_to_one
+#     condition: "orders.customer_id = customers.id"

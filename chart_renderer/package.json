@@ -1,0 +1,14 @@
+{
+  "name": "chart_renderer",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "echarts": "^5.5.1",
+    "canvas": "^2.11.2"
+  }
+}

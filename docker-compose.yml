@@ -1,0 +1,50 @@
+services:
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  chart_renderer:
+    build: ./chart_renderer
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"   # наружу не светим, дёргает только backend
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      OLLAMA_URL: http://ollama:11434
+      CHART_RENDERER_URL: http://chart_renderer:3000
+      # Инлайн-креды для Wren CLI (см. README "Overriding defaults" в docs.getwren.ai) -
+      # чтобы не хранить пароль в ~/.wren/profiles.yml внутри образа.
+      WREN_CONNECTION_INFO: >-
+        {"datasource":"postgres","host":"${POSTGRES_HOST}","port":"${POSTGRES_PORT}","database":"${POSTGRES_DB}","user":"${POSTGRES_USER}","password":"${POSTGRES_PASSWORD}"}
+    depends_on:
+      chart_renderer:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    volumes:
+      - ./logs:/var/log/text2sql
+      - ./backend/wren:/app/wren   # чтобы `wren context build`, сделанный внутри контейнера, сохранялся на хосте
+      - ./backend/tokens.txt:/app/tokens.txt:ro   # хэши токенов, только для чтения контейнером
+    ports:
+      - "8000:8000"
+volumes:
+  ollama_data:

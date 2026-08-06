@@ -1,0 +1,17 @@
+# Ключи
+
+.env
+backend/tokens.txt
+
+# Кэш
+
+__pycache__/
+*.pyc
+
+# Прочее
+
+logs/
+node_modules/
+backend/wren/target/
+backend/wren/.wren/
+chart.png
