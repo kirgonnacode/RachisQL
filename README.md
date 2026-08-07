@@ -1,26 +1,51 @@
-# RachisQL: Text2SQL API-бэкенд для локальных LLM (v0.3.1)
+# RachisQL: Text2SQL API-бэкенд для локальных LLM (v0.3.2)
 
 Своя реализация text-to-SQL: локальная LLM (Ollama/Qwen) генерирует SQL,
 guard разрешает только read-only запросы, PostgreSQL выполняет,
 опционально семантический слой Wren (MDL) даёт более точный контекст схемы.
 
+
 ## Функционал
 
 IN PROGRESS 
 
+
 ## Архитектура
 
+```mermaid
+flowchart TB
+    User[Пользователь]
+
+    subgraph Backend[RachisQL]
+        FastAPI[FastAPI]
+        Wren[Wren Engine<br/>Семантический слой]
+        MDL[MDL Модель]
+        ECharts
+        sql_guard[SQL Guard]
+    end
+
+    subgraph AI[LLM]
+        Ollama[Ollama]
+    end
+
+    subgraph Storage[БД]
+        PostgreSQL[(PostgreSQL)]
+    end
+
+    User -->|Запрос API| FastAPI
+    FastAPI -->|Запрос + Контекст| Ollama
+    Ollama -->|SQL| FastAPI
+    FastAPI -->|SQL| sql_guard
+    sql_guard -->|SQL + MDL| Wren
+    MDL -->|Модель| Wren
+    Wren -->|Запрос| PostgreSQL
+    PostgreSQL -->|Данные| Wren
+    Wren -->|Результат SQL| FastAPI
+    FastAPI -->|Ответ API| User
+    FastAPI -->|Результат SQL| ECharts
+    ECharts -->|PNG График| FastAPI
 ```
-Вопрос → FastAPI → Ollama → генерация SQL
-                                        ↓
-                              sql_guard (только SELECT, LIMIT, таймаут)
-                                        ↓
-                                   Wren MDL Layer
-                                        ↓
-                                   PostgreSQL
-                                        ↓
-                                  Apache ECharts
-```
+
 
 ## Деплой на сервер по SSH
 
@@ -85,6 +110,7 @@ IN PROGRESS
 новая строка в `backend/tokens.txt`, `docker compose restart backend`
 (файл читается один раз при старте, hot reload токенов не сделан на данный момент).
 
+
 ## Терминальный тест перед подключением
 
 ```bash
@@ -94,10 +120,12 @@ python cli_test.py "сколько заказов за последний мес
 # сохранит chart.png рядом со скриптом и распечатает SQL + сырые строки
 ```
 
+
 ## Логи
 
 Пишутся в `./logs/app.log` на хосте (смонтировано в контейнер) — там же
 видно, какой SQL сгенерировала модель на каждый вопрос.
+
 
 ## Безопасность
 
@@ -119,6 +147,7 @@ python cli_test.py "сколько заказов за последний мес
    sudo ufw deny 8000
    sudo ufw enable
    ```
+
 
 ## Как подключить полноценный Wren
 
@@ -159,6 +188,5 @@ python cli_test.py "сколько заказов за последний мес
 
 IN PROGRESS 
 
----
 
 **Разработчик:** Малышев Кирилл Игоревич (@kirgonnacode)  
