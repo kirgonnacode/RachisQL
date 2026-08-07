@@ -1,4 +1,4 @@
-# RachisQL: Text2SQL API-бэкенд для локальных LLM (v0.3.2)
+# RachisQL: Text2SQL API-бэкенд для локальных LLM (v0.3.3)
 
 Своя реализация text-to-SQL: локальная LLM (Ollama/Qwen) генерирует SQL,
 guard разрешает только read-only запросы, PostgreSQL выполняет,
@@ -7,8 +7,7 @@ guard разрешает только read-only запросы, PostgreSQL вы�
 
 ## Функционал
 
-IN PROGRESS 
-
+* **PNG график**: Пользователь в ответ на свой вопрос на естественном языке получает график на основе данных из БД, тип графика определяется автоматически.
 
 ## Архитектура
 
@@ -20,8 +19,9 @@ flowchart TB
         FastAPI[FastAPI]
         Wren[Wren Engine<br/>Семантический слой]
         MDL[MDL Модель]
-        ECharts
+        ECharts[chart_renderer<br/>Node + ECharts]
         sql_guard[SQL Guard]
+        auth.py[auth.py<br/>Bearer-токен]
     end
 
     subgraph AI[LLM]
@@ -32,7 +32,8 @@ flowchart TB
         PostgreSQL[(PostgreSQL)]
     end
 
-    User -->|Запрос API| FastAPI
+    User -->|Запрос API| auth.py
+    auth.py -->|Запрос API| FastAPI
     FastAPI -->|Запрос + Контекст| Ollama
     Ollama -->|SQL| FastAPI
     FastAPI -->|SQL| sql_guard
@@ -49,10 +50,9 @@ flowchart TB
 
 ## Деплой на сервер по SSH
 
-1. Подключаемся и клонируем репозиторий:
+1. Клонируем репозиторий:
    ```bash
-   ssh user@your-server
-   git clone 
+   git clone git@github.com:kirgonnacode/RachisQL.git
    ```
 
 2. Ставим Docker и Docker Compose, если их ещё нет:
@@ -186,7 +186,10 @@ python cli_test.py "сколько заказов за последний мес
 
 ## Технологический стек
 
-IN PROGRESS 
+Apache ECharts
+FastAPI
+Ollama
+Wren CLI
 
 
 **Разработчик:** Малышев Кирилл Игоревич (@kirgonnacode)  

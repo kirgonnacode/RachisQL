@@ -11,7 +11,7 @@ COPY app ./app
 COPY wren ./wren
 COPY scripts ./scripts
 
-RUN mkdir -p /var/log/text2sql
+RUN mkdir -p /var/log/RachisQL
 
 EXPOSE 8000
 

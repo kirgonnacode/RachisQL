@@ -41,7 +41,7 @@ services:
       ollama:
         condition: service_started
     volumes:
-      - ./logs:/var/log/text2sql
+      - ./logs:/var/log/RachisQL
       - ./backend/wren:/app/wren   # чтобы `wren context build`, сделанный внутри контейнера, сохранялся на хосте
       - ./backend/tokens.txt:/app/tokens.txt:ro   # хэши токенов, только для чтения контейнером
     ports:
