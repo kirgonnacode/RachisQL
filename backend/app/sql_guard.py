@@ -11,6 +11,7 @@ FORBIDDEN_KEYWORDS = {
     "merge", "replace", "vacuum", "reindex", "execute", "do",
 }
 
+_CODE_FENCE_RE = re.compile(r"```(?:sql)?\s*\n?(.*?)```", re.IGNORECASE | re.DOTALL)
 
 class UnsafeSQLError(Exception):
     pass
@@ -19,6 +20,9 @@ class UnsafeSQLError(Exception):
 def _strip_markdown_fences(raw_sql: str) -> str:
     # LLM модели часто заворачивают SQL в ```sql ... ``` - убираем это.
     text = raw_sql.strip()
+    match = _CODE_FENCE_RE.search(text)
+    if match:
+        return match.group(1).strip()
     text = re.sub(r"^```(sql)?", "", text, flags=re.IGNORECASE).strip()
     text = re.sub(r"```$", "", text).strip()
     return text
