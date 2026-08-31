@@ -1,0 +1,35 @@
+# Полная спецификация полей: https://docs.getwren.ai/oss/reference/mdl
+#
+# Проверить структуру и собрать MDL:
+#   wren context build
+#
+# Пример ниже для несуществующей таблицы `orders` нужно заменить на реальные таблицы и колонки.
+
+name: orders
+table_reference:
+  catalog: ""
+  schema: public
+  table: orders
+columns:
+  - name: id
+    type: INTEGER
+    is_calculated: false
+    not_null: true
+    is_primary_key: true
+    properties: {}
+  - name: customer_id
+    type: INTEGER
+    is_calculated: false
+    not_null: true
+    properties:
+      description: "Ссылка на клиента"        # описание столбца
+  - name: total
+    type: DECIMAL(10, 2)
+    is_calculated: false
+    not_null: false
+    properties:
+      description: "Сумма заказа в рублях"
+primary_key: id
+cached: false
+properties:
+  description: "Заказы клиентов"                # описание всей таблицы
