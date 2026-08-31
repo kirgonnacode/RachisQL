@@ -14,4 +14,4 @@ logs/
 node_modules/
 backend/wren/target/
 backend/wren/.wren/
-chart.png
+cli_test_output/

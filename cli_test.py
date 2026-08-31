@@ -10,6 +10,7 @@
 """
 
 import argparse
+import datetime
 import os
 import sys
 from pathlib import Path
@@ -45,7 +46,7 @@ def main() -> int:
         help="Bearer-токен (по умолчанию берётся из RachisQL_API_TOKEN)",
     )
     parser.add_argument("--no-image", action="store_true", help="Не запрашивать PNG-график")
-    parser.add_argument("--out", default="chart.png", help="Куда сохранить PNG (по умолчанию ./chart.png)")
+    parser.add_argument("--out", default=None, help="Куда сохранить PNG (по умолчанию cli_test_output/chart_<время>.png)")
     args = parser.parse_args()
 
     if not args.token:
@@ -102,7 +103,13 @@ def main() -> int:
         _print_error(img_resp)
         return 1
 
-    out_path = Path(args.out)
+    if args.out:
+        out_path = Path(args.out)
+    else:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = Path("cli_test_output") / f"chart_{timestamp}.png"    
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(img_resp.content)
     print(f"✓ График сохранён: {out_path.resolve()} ({len(img_resp.content)} байт)")
     return 0

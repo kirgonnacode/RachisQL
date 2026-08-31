@@ -1,4 +1,5 @@
 import logging
+from logging.handlers import RotatingFileHandler
 import sys
 
 
@@ -19,7 +20,12 @@ def setup_logging() -> logging.Logger:
     logger.addHandler(stream_handler)
 
     try:
-        file_handler = logging.FileHandler("/var/log/RachisQL/app.log", encoding="utf-8")
+        file_handler = RotatingFileHandler(
+            "/var/log/RachisQL/app.log",
+            maxBytes=10 * 1024 * 1024,
+            backupCount=10,
+            encoding="utf-8",
+        )
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
     except (FileNotFoundError, PermissionError):
