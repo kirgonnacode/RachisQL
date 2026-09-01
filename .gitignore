@@ -15,3 +15,5 @@ node_modules/
 backend/wren/target/
 backend/wren/.wren/
 cli_test_output/
+target/
+.wren/memory/
