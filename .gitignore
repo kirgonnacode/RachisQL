@@ -15,5 +15,10 @@ node_modules/
 backend/wren/target/
 backend/wren/.wren/
 cli_test_output/
-target/
 .wren/memory/
+backend/wren/cubes/
+backend/wren/knowledge/
+backend/wren/models/
+backend/wren/views/
+backend/wren/AGENTS.md
+backend/wren/relationships.yml

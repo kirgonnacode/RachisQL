@@ -1,7 +1,0 @@
-# Конфигурация Wren-проекта.
-# Полная схема полей: https://docs.getwren.ai/oss/reference/mdl
-schema_version: 5
-name: RachisQL
-catalog: wren
-schema: public
-data_source: postgres

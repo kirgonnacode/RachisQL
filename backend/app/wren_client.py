@@ -91,17 +91,22 @@ async def execute(sql: str, limit: int) -> list[dict]:
     if code != 0:
         raise WrenExecutionError(stderr or "wren query failed")
 
-    try:
-        data = json.loads(stdout)
-    except json.JSONDecodeError as e:
-        raise WrenExecutionError(f"Не удалось распарсить JSON от wren query: {e}")
-
-    if not isinstance(data, list):
-        raise WrenExecutionError(
-            f"wren query вернул не список строк, а {type(data).__name__} - "
-            f"похоже, поменялся формат вывода CLI, нужно проверить версию Wren"
-        )
-    return data
+    rows = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise WrenExecutionError(f"Не удалось распарсить строку JSON от wren query: {e}")
+        if not isinstance(row, dict):
+            raise WrenExecutionError(
+                f"Строка от wren query - не JSON-объект, а {type(row).__name__} - "
+                f"похоже, поменялся формат вывода CLI, нужно проверить версию Wren"
+            )
+        rows.append(row)
+    return rows
 
 
 def is_configured() -> bool:
