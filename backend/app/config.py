@@ -35,6 +35,9 @@ WREN_CONNECTION_INFO = os.getenv("WREN_CONNECTION_INFO")    # не обязат�
 TOKENS_FILE = os.getenv("TOKENS_FILE", "/app/tokens.txt")
 RATE_LIMIT_PER_MINUTE = os.getenv("RATE_LIMIT_PER_MINUTE", "20")
 
+# --- Часовой пояс БД ---
+CHART_TIMEZONE_OFFSET_HOURS = os.getenv("CHART_TIMEZONE_OFFSET_HOURS", "0")
+
 
 def _validate() -> None:
     errors: list[str] = []
@@ -69,6 +72,12 @@ def _validate() -> None:
         if not str(value).strip().isdigit():
             errors.append(f"{name} должен быть числом, получили: '{value}'")
 
+    if not CHART_TIMEZONE_OFFSET_HOURS.strip().lstrip("-").isdigit():
+        errors.append(
+            f"CHART_TIMEZONE_OFFSET_HOURS должен быть целым числом (можно "
+            f"отрицательным), получили: '{CHART_TIMEZONE_OFFSET_HOURS}'"
+        )        
+
     # Проверка формата URL-полей
     if not OLLAMA_URL.startswith("http"):
         errors.append(f"OLLAMA_URL должен начинаться с http, получили: '{OLLAMA_URL}'")
@@ -95,6 +104,7 @@ MAX_ROWS = int(MAX_ROWS)
 QUERY_TIMEOUT_SECONDS = int(QUERY_TIMEOUT_SECONDS)
 WREN_TIMEOUT_SECONDS = int(WREN_TIMEOUT_SECONDS)
 RATE_LIMIT_PER_MINUTE = int(RATE_LIMIT_PER_MINUTE)
+CHART_TIMEZONE_OFFSET_HOURS = int(CHART_TIMEZONE_OFFSET_HOURS)
 
 DSN = (
     f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}"

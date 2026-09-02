@@ -9,8 +9,13 @@
 
 """
 
+import datetime
 from decimal import Decimal
 from typing import Any
+from .config import CHART_TIMEZONE_OFFSET_HOURS
+
+_MS_TIMESTAMP_MIN = 946684800000   # 2000-01-01
+_MS_TIMESTAMP_MAX = 4102444800000  # 2100-01-01
 
 
 def _is_number(value: Any) -> bool:
@@ -30,6 +35,22 @@ def _is_numeric_column(col: str, rows: list[dict]) -> bool:
     return all(_is_number(v) for v in non_null_values)
 
 
+def _looks_like_ms_timestamp_column(col: str, rows: list[dict]) -> bool:
+    non_null_values = [row.get(col) for row in rows if row.get(col) is not None]
+    if not non_null_values:
+        return False
+    return all(
+        isinstance(v, int) and not isinstance(v, bool) and _MS_TIMESTAMP_MIN <= v <= _MS_TIMESTAMP_MAX
+        for v in non_null_values
+    )
+
+
+def _ms_timestamp_to_label(value: int) -> str:
+    tz = datetime.timezone(datetime.timedelta(hours=CHART_TIMEZONE_OFFSET_HOURS))
+    dt = datetime.datetime.fromtimestamp(value / 1000, tz=tz)
+    return dt.strftime("%Y-%m-%d")
+
+
 def build_chart_option(rows: list[dict], question: str) -> dict | None:
     if not rows:
         return None
@@ -38,22 +59,29 @@ def build_chart_option(rows: list[dict], question: str) -> dict | None:
     if not columns:
         return None
 
-    # ищем первую колонку, которая НЕ числовая - это ось категорий
     category_col = None
+    category_is_timestamp = False
     for col in columns:
-        if not _is_numeric_column(col, rows):
+        if _looks_like_ms_timestamp_column(col, rows):
             category_col = col
+            category_is_timestamp = True
             break
+
+    if category_col is None:
+        for col in columns:
+            if not _is_numeric_column(col, rows):
+                category_col = col
+                break
 
     numeric_cols = [c for c in columns if c != category_col and _is_numeric_column(c, rows)]
 
     if not numeric_cols:
-        # нет ни одной числовой колонки - строить нечего, вернём таблицу как есть
         return None
 
     if category_col is None:
-        # все колонки числовые (например, один агрегат) - рисуем как есть по индексу строки
         categories = [str(i + 1) for i in range(len(rows))]
+    elif category_is_timestamp:
+        categories = [_ms_timestamp_to_label(row.get(category_col)) for row in rows]
     else:
         categories = [str(row.get(category_col)) for row in rows]
 
@@ -64,6 +92,8 @@ def build_chart_option(rows: list[dict], question: str) -> dict | None:
             "name": col,
             "type": chart_type,
             "data": [_to_json_number(row.get(col)) or 0 for row in rows],
+            "label": {"show": True, "position": "top"},
+            "itemStyle": {"color": '#3D75E4', "borderRadius": [10, 10, 0, 0]},
         }
         for col in numeric_cols
     ]
