@@ -73,6 +73,9 @@ def build_chart_option(rows: list[dict], question: str) -> dict | None:
                 category_col = col
                 break
 
+    if category_is_timestamp:
+        rows = sorted(rows, key=lambda r: (r.get(category_col) is None, r.get(category_col) or 0))            
+
     numeric_cols = [c for c in columns if c != category_col and _is_numeric_column(c, rows)]
 
     if not numeric_cols:

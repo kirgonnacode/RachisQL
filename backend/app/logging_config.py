@@ -1,11 +1,12 @@
 import logging
 from logging.handlers import RotatingFileHandler
 import sys
+from .config import LOG_LEVEL
 
 
 def setup_logging() -> logging.Logger:
     logger = logging.getLogger("RachisQL")
-    logger.setLevel(logging.INFO)
+    logger.setLevel(getattr(logging, LOG_LEVEL.upper()))
 
     if logger.handlers:
         return logger

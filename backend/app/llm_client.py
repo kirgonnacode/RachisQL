@@ -1,5 +1,5 @@
 import httpx
-from .config import OLLAMA_MAX_TOKENS, OLLAMA_MODEL, OLLAMA_TIMEOUT_SECONDS, OLLAMA_URL
+from .config import OLLAMA_MAX_TOKENS, OLLAMA_MODEL, OLLAMA_TIMEOUT_SECONDS, OLLAMA_URL, OLLAMA_NUM_CTX
 from .logging_config import logger
 
 SYSTEM_PROMPT = """Ты - генератор SQL-запросов для PostgreSQL.
@@ -35,9 +35,11 @@ async def generate_sql(question: str, schema_context: str) -> str:
         "prompt": prompt,
         "system": SYSTEM_PROMPT,
         "stream": False,
+        "think": False,
         "options": {
             "temperature": 0.0,
             "num_predict": OLLAMA_MAX_TOKENS,
+            "num_ctx": OLLAMA_NUM_CTX,
         },
     }
 
@@ -47,6 +49,20 @@ async def generate_sql(question: str, schema_context: str) -> str:
         response.raise_for_status()
         data = response.json()
 
+    logger.debug("Ollama сырой ответ целиком: %s", data)
     raw_sql = data.get("response", "").strip()
+    if not raw_sql:
+        logger.warning("Ollama вернула пустой SQL. Полный ответ: %s", data)
+
+    eval_count = data.get("eval_count", 0)
+    eval_duration_ns = data.get("eval_duration", 0)
+    if eval_duration_ns > 0:
+        tokens_per_sec = eval_count / (eval_duration_ns / 1e9)
+        logger.info(
+            "Ollama сгенерировала %d токенов за %.2fс (%.1f ток/сек)",
+            eval_count, eval_duration_ns / 1e9, tokens_per_sec
+        )
+
     logger.info("Ollama вернула сырой SQL: %s", raw_sql.replace("\n", " "))
+
     return raw_sql

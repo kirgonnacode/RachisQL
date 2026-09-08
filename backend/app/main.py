@@ -1,4 +1,4 @@
-# --- RachisQL Версия: 0.3.7 ---
+# --- RachisQL Версия: 0.3.8 ---
 
 
 
@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="RachisQL", version="0.3.7", lifespan=lifespan)
+app = FastAPI(title="RachisQL", version="0.3.8", lifespan=lifespan)
 
 ERROR_RESPONSES = {
     401: {"model": ErrorResponse, "description": "Нет или невалиден Bearer-токен"},

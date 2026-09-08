@@ -18,6 +18,7 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
 OLLAMA_TIMEOUT_SECONDS = os.getenv("OLLAMA_TIMEOUT_SECONDS", "60")
 OLLAMA_MAX_TOKENS = os.getenv("OLLAMA_MAX_TOKENS", "500")
+OLLAMA_NUM_CTX = os.getenv("OLLAMA_NUM_CTX", "8192")
 
 # --- Guardrails ---
 MAX_ROWS = os.getenv("MAX_ROWS", "500")
@@ -37,6 +38,9 @@ RATE_LIMIT_PER_MINUTE = os.getenv("RATE_LIMIT_PER_MINUTE", "20")
 
 # --- Часовой пояс БД ---
 CHART_TIMEZONE_OFFSET_HOURS = os.getenv("CHART_TIMEZONE_OFFSET_HOURS", "0")
+
+# --- Логи ---
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 
 def _validate() -> None:
@@ -60,6 +64,7 @@ def _validate() -> None:
         "POSTGRES_POOL_MAX_SIZE": POSTGRES_POOL_MAX_SIZE,
         "OLLAMA_TIMEOUT_SECONDS": OLLAMA_TIMEOUT_SECONDS,
         "OLLAMA_MAX_TOKENS": OLLAMA_MAX_TOKENS,
+        "OLLAMA_NUM_CTX": OLLAMA_NUM_CTX,
         "MAX_ROWS": MAX_ROWS,
         "QUERY_TIMEOUT_SECONDS": QUERY_TIMEOUT_SECONDS,
         "WREN_TIMEOUT_SECONDS": WREN_TIMEOUT_SECONDS,
@@ -76,7 +81,10 @@ def _validate() -> None:
         errors.append(
             f"CHART_TIMEZONE_OFFSET_HOURS должен быть целым числом (можно "
             f"отрицательным), получили: '{CHART_TIMEZONE_OFFSET_HOURS}'"
-        )        
+        )
+
+    if LOG_LEVEL.upper() not in ("DEBUG", "INFO", "WARNING", "ERROR"):
+        errors.append(f"LOG_LEVEL должен быть одним из DEBUG/INFO/WARNING/ERROR, получили: '{LOG_LEVEL}'")            
 
     # Проверка формата URL-полей
     if not OLLAMA_URL.startswith("http"):
@@ -100,6 +108,7 @@ POSTGRES_POOL_MIN_SIZE = int(POSTGRES_POOL_MIN_SIZE)
 POSTGRES_POOL_MAX_SIZE = int(POSTGRES_POOL_MAX_SIZE)
 OLLAMA_TIMEOUT_SECONDS = int(OLLAMA_TIMEOUT_SECONDS)
 OLLAMA_MAX_TOKENS = int(OLLAMA_MAX_TOKENS)
+OLLAMA_NUM_CTX = int(OLLAMA_NUM_CTX)
 MAX_ROWS = int(MAX_ROWS)
 QUERY_TIMEOUT_SECONDS = int(QUERY_TIMEOUT_SECONDS)
 WREN_TIMEOUT_SECONDS = int(WREN_TIMEOUT_SECONDS)
