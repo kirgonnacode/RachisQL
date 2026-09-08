@@ -1,4 +1,4 @@
-# --- RachisQL Версия: 0.3.8 ---
+# --- RachisQL Версия: 0.3.9 ---
 
 
 
@@ -18,6 +18,7 @@ from .models import AskRequest, AskResponse, ErrorResponse
 from .rate_limit import RateLimitExceeded, check_rate_limit
 from .schema_context import get_schema_context
 from .sql_guard import UnsafeSQLError, validate_and_sanitize
+from .value_resolver import resolve_dictionary_values
 
 
 @asynccontextmanager
@@ -27,7 +28,7 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="RachisQL", version="0.3.8", lifespan=lifespan)
+app = FastAPI(title="RachisQL", version="0.3.9", lifespan=lifespan)
 
 ERROR_RESPONSES = {
     401: {"model": ErrorResponse, "description": "Нет или невалиден Bearer-токен"},
@@ -78,6 +79,8 @@ async def _generate_and_validate_sql(question: str) -> str:
             422,
             detail=_error(f"Сгенерированный SQL отклонён guard'ом: {e}", generated_sql=raw_sql),
         )
+    
+    safe_sql = resolve_dictionary_values(safe_sql)
 
     if wren_client.is_configured():
         try:

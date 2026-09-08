@@ -42,6 +42,9 @@ CHART_TIMEZONE_OFFSET_HOURS = os.getenv("CHART_TIMEZONE_OFFSET_HOURS", "0")
 # --- Логи ---
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+# --- Настройка порога для словарей ---
+DICTIONARY_MATCH_THRESHOLD = os.getenv("DICTIONARY_MATCH_THRESHOLD", "75")
+
 
 def _validate() -> None:
     errors: list[str] = []
@@ -69,6 +72,7 @@ def _validate() -> None:
         "QUERY_TIMEOUT_SECONDS": QUERY_TIMEOUT_SECONDS,
         "WREN_TIMEOUT_SECONDS": WREN_TIMEOUT_SECONDS,
         "RATE_LIMIT_PER_MINUTE": RATE_LIMIT_PER_MINUTE,
+        "DICTIONARY_MATCH_THRESHOLD": DICTIONARY_MATCH_THRESHOLD,
     }
     for name, value in required_ints.items():
         if not value or not str(value).strip():
@@ -114,6 +118,7 @@ QUERY_TIMEOUT_SECONDS = int(QUERY_TIMEOUT_SECONDS)
 WREN_TIMEOUT_SECONDS = int(WREN_TIMEOUT_SECONDS)
 RATE_LIMIT_PER_MINUTE = int(RATE_LIMIT_PER_MINUTE)
 CHART_TIMEZONE_OFFSET_HOURS = int(CHART_TIMEZONE_OFFSET_HOURS)
+DICTIONARY_MATCH_THRESHOLD = int(DICTIONARY_MATCH_THRESHOLD)
 
 DSN = (
     f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
