@@ -1,14 +1,3 @@
-"""
-Принцип работы:
-- Пустой результат -> None (main.py вернёт текстовый ответ без картинки).
-- Первая колонка не-числового типа (строка/дата) -> ось X (категории).
-- Остальные числовые колонки -> серии.
-- Если категорий много (>15) и есть одна числовая серия -> line chart, иначе bar chart.
-- Если данные вообще не подходят под категория+числа (например, один
-  агрегат SELECT COUNT(*) -> одна строка/одна колонка) -> одиночный bar.
-
-"""
-
 import datetime
 from decimal import Decimal
 from typing import Any
@@ -17,6 +6,10 @@ from .config import CHART_TIMEZONE_OFFSET_HOURS
 _MS_TIMESTAMP_MIN = 946684800000   # 2000-01-01
 _MS_TIMESTAMP_MAX = 4102444800000  # 2100-01-01
 
+_MONTH_ABBR_RU = {
+    1: "Янв", 2: "Фев", 3: "Мар", 4: "Апр", 5: "Май", 6: "Июн",
+    7: "Июл", 8: "Авг", 9: "Сен", 10: "Окт", 11: "Ноя", 12: "Дек",
+}
 
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float, Decimal)) and not isinstance(value, bool)
@@ -44,12 +37,43 @@ def _looks_like_ms_timestamp_column(col: str, rows: list[dict]) -> bool:
         for v in non_null_values
     )
 
+def _detect_granularity(sorted_ms_values: list[int]) -> str:
+    if len(sorted_ms_values) < 2:
+        return "date"
 
-def _ms_timestamp_to_label(value: int) -> str:
+    diffs_days = sorted(
+        (sorted_ms_values[i + 1] - sorted_ms_values[i]) / 86_400_000
+        for i in range(len(sorted_ms_values) - 1)
+    )
+    median_diff = diffs_days[len(diffs_days) // 2]
+
+    if 27 <= median_diff <= 32:
+        return "month"
+    if 350 <= median_diff <= 380:
+        return "year"
+    if 0.5 <= median_diff <= 2:
+        return "day"
+    return "date"
+
+def _ms_timestamp_to_label(value: int, granularity: str) -> str:
     tz = datetime.timezone(datetime.timedelta(hours=CHART_TIMEZONE_OFFSET_HOURS))
     dt = datetime.datetime.fromtimestamp(value / 1000, tz=tz)
+
+    if granularity == "month":
+        return f"{_MONTH_ABBR_RU[dt.month]}\n{dt.year}"
+    if granularity == "year":
+        return str(dt.year)
+    if granularity == "day":
+        return f"{dt.day}\n{_MONTH_ABBR_RU[dt.month].lower()}"
     return dt.strftime("%Y-%m-%d")
 
+def _truncate(text: str, max_len: int) -> str:
+    if len(text) <= max_len:
+        return text
+    truncated = text[:max_len].rsplit(" ", 1)[0]
+    if not truncated:
+        truncated = text[:max_len]
+    return truncated + "…"
 
 def build_chart_option(rows: list[dict], question: str) -> dict | None:
     if not rows:
@@ -84,37 +108,59 @@ def build_chart_option(rows: list[dict], question: str) -> dict | None:
     if category_col is None:
         categories = [str(i + 1) for i in range(len(rows))]
     elif category_is_timestamp:
-        categories = [_ms_timestamp_to_label(row.get(category_col)) for row in rows]
+        ts_values = [row.get(category_col) for row in rows if row.get(category_col) is not None]
+        granularity = _detect_granularity(sorted(ts_values))
+        categories = [
+            _ms_timestamp_to_label(row.get(category_col), granularity) if row.get(category_col) is not None else ""
+            for row in rows
+        ]
     else:
-        categories = [str(row.get(category_col)) for row in rows]
+        categories = [_truncate(str(row.get(category_col)), 20) for row in rows]
 
     chart_type = "line" if len(categories) > 15 else "bar"
 
-    series = [
-        {
+    series = []
+    all_numeric_values: list[float] = []
+    for col in numeric_cols:
+        raw_values = [_to_json_number(row.get(col)) or 0 for row in rows]
+        all_numeric_values.extend(raw_values)
+        data_points = [
+            {"value": v, "label": {"show": False}} if v == 0 else v
+            for v in raw_values
+        ]
+        entry = {
             "name": col,
             "type": chart_type,
-            "data": [_to_json_number(row.get(col)) or 0 for row in rows],
+            "data": data_points,
             "label": {"show": True, "position": "top"},
-            "itemStyle": {"color": '#3D75E4', "borderRadius": [10, 10, 0, 0]},
+            "labelLayout": {"hideOverlap": True},
+            "itemStyle": {"borderRadius": [10, 10, 0, 0] if chart_type == "bar" else [0, 0, 0, 0]},
         }
-        for col in numeric_cols
-    ]
+        if chart_type == "line":
+            entry["smooth"] = True
+            entry["areaStyle"] = {"opacity": 0.15}
+        series.append(entry)
 
     option = {
-        "title": {"text": question[:60], "left": "center", "textStyle": {"fontSize": 14}},
+        "title": {"text": _truncate(question, 60), "left": "center", "textStyle": {"fontSize": 14}},
         "tooltip": {"trigger": "axis"},
+        "color": ['#3D75E4', '#57A003', '#7537F2', '#4FC731', '#F7BA59', '#D62525', '#779EEC', '#BC64DF', '#64C8DF', '#89BD4F'],
         "grid": {"top": 70, "left": 50, "right": 30, "bottom": 60, "containLabel": True},
         "xAxis": {
             "type": "category",
             "data": categories,
-            "axisLabel": {"rotate": 30 if len(categories) > 8 else 0},
+            "axisLabel": {"rotate": 30 if len(categories) > 8 and "\n" not in "".join(categories) else 0},
         },
         "yAxis": {"type": "value"},
         "series": series,
     }
 
     if len(numeric_cols) > 1:
-        option["legend"] = {"top": 28, "data": numeric_cols}
+        option["legend"] = {"icon": "circle", "data": numeric_cols}
+        if len(numeric_cols) > 6:
+            option["legend"]["bottom"] = 0
+            option["grid"]["bottom"] = 90
+        else:
+            option["legend"]["top"] = 28
 
     return option
