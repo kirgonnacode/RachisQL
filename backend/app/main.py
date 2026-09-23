@@ -1,4 +1,4 @@
-# --- RachisQL Версия: 0.4.1 ---
+# --- RachisQL Версия: 0.4.2 ---
 
 
 
@@ -10,7 +10,7 @@ from . import wren_client
 from .auth import require_auth
 from .chart_builder import build_chart_option
 from .chart_client import ChartRenderError, render_png
-from .config import MAX_ROWS
+from .config import MAX_ROWS, SQL_MAX_ATTEMPTS
 from .db import check_db_connection, close_pool, init_pool, run_readonly_query
 from .llm_client import generate_sql
 from .logging_config import logger
@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="RachisQL", version="0.4.1", lifespan=lifespan)
+app = FastAPI(title="RachisQL", version="0.4.2", lifespan=lifespan)
 
 ERROR_RESPONSES = {
     401: {"model": ErrorResponse, "description": "Нет или невалиден Bearer-токен"},
@@ -66,35 +66,52 @@ async def health():
 async def _generate_and_validate_sql(question: str) -> str:
     try:
         schema_context = await get_schema_context(question)
-        raw_sql = await generate_sql(question, schema_context)
     except Exception as e:
-        logger.error("Не удалось получить схему или сгенерировать SQL: %s", e)
-        raise HTTPException(503, detail=_error(f"LLM или база данных временно недоступны: {e}"))
+        logger.error("Не удалось получить схему: %s", e)
+        raise HTTPException(503, detail=_error(f"База данных временно недоступна: {e}"))
 
-    try:
-        safe_sql = validate_and_sanitize(raw_sql)
-    except UnsafeSQLError as e:
-        logger.warning("Небезопасный SQL отклонён: %s | причина: %s", raw_sql, e)
-        raise HTTPException(
-            422,
-            detail=_error(f"Сгенерированный SQL отклонён guard'ом: {e}", generated_sql=raw_sql),
-        )
-    
-    safe_sql = resolve_dictionary_values(safe_sql)
+    previous_sql: str | None = None
+    previous_error: str | None = None
+    last_raw_sql = ""
+    last_error_detail = ""
 
-    if wren_client.is_configured():
+    for attempt in range(1, SQL_MAX_ATTEMPTS + 1):
+        try:
+            raw_sql = await generate_sql(question, schema_context, previous_sql, previous_error)
+        except Exception as e:
+            logger.error("Не удалось сгенерировать SQL (попытка %d): %s", attempt, e)
+            raise HTTPException(503, detail=_error(f"LLM временно недоступна: {e}"))
+
+        last_raw_sql = raw_sql
+
+        try:
+            safe_sql = validate_and_sanitize(raw_sql)
+        except UnsafeSQLError as e:
+            logger.warning("Попытка %d: guard отклонил SQL: %s | причина: %s", attempt, raw_sql, e)
+            previous_sql, previous_error = raw_sql, str(e)
+            last_error_detail = f"Сгенерированный SQL отклонён guard'ом: {e}"
+            continue
+
+        safe_sql = resolve_dictionary_values(safe_sql)
+
+        if not wren_client.is_configured():
+            return safe_sql
+
         try:
             await wren_client.dry_run(safe_sql)
+            if attempt > 1:
+                logger.info("SQL успешно исправлен с попытки %d/%d", attempt, SQL_MAX_ATTEMPTS)
+            return safe_sql
         except wren_client.WrenValidationError as e:
-            logger.warning("Wren dry-run отклонил SQL: %s | причина: %s", safe_sql, e)
-            raise HTTPException(
-                422,
-                detail=_error(f"Запрос не соответствует модели данных (Wren): {e}", generated_sql=safe_sql),
-            )
+            logger.warning("Попытка %d: Wren dry-run отклонил SQL: %s | причина: %s", attempt, safe_sql, e)
+            previous_sql, previous_error = safe_sql, str(e)
+            last_error_detail = f"Запрос не соответствует модели данных (Wren): {e}"
+            continue
         except wren_client.WrenExecutionError as e:
             logger.warning("Wren dry-run недоступен (%s), продолжаю без семантической валидации", e)
+            return safe_sql
 
-    return safe_sql
+    raise HTTPException(422, detail=_error(last_error_detail, generated_sql=last_raw_sql))
 
 
 async def _execute_sql(sql: str) -> list[dict]:

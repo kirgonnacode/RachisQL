@@ -23,6 +23,7 @@ OLLAMA_NUM_CTX = os.getenv("OLLAMA_NUM_CTX", "8192")
 # --- Guardrails ---
 MAX_ROWS = os.getenv("MAX_ROWS", "500")
 QUERY_TIMEOUT_SECONDS = os.getenv("QUERY_TIMEOUT_SECONDS", "15")
+SQL_MAX_ATTEMPTS = os.getenv("SQL_MAX_ATTEMPTS", "2")
 
 # --- Chart rendering ---
 CHART_RENDERER_URL = os.getenv("CHART_RENDERER_URL", "http://chart_renderer:3000")
@@ -75,6 +76,7 @@ def _validate() -> None:
         "RATE_LIMIT_PER_MINUTE": RATE_LIMIT_PER_MINUTE,
         "DICTIONARY_MATCH_THRESHOLD": DICTIONARY_MATCH_THRESHOLD,
         "WREN_SEARCH_LIMIT": WREN_SEARCH_LIMIT,
+        "SQL_MAX_ATTEMPTS": SQL_MAX_ATTEMPTS,
     }
     for name, value in required_ints.items():
         if not value or not str(value).strip():
@@ -122,6 +124,7 @@ RATE_LIMIT_PER_MINUTE = int(RATE_LIMIT_PER_MINUTE)
 CHART_TIMEZONE_OFFSET_HOURS = int(CHART_TIMEZONE_OFFSET_HOURS)
 DICTIONARY_MATCH_THRESHOLD = int(DICTIONARY_MATCH_THRESHOLD)
 WREN_SEARCH_LIMIT = int(WREN_SEARCH_LIMIT)
+SQL_MAX_ATTEMPTS = int(SQL_MAX_ATTEMPTS)
 
 DSN = (
     f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}"

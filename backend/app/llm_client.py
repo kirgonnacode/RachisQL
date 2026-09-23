@@ -36,12 +36,27 @@ SYSTEM_PROMPT = """Ты - генератор SQL-запросов для Postgre
 """
 
 
-async def generate_sql(question: str, schema_context: str) -> str:
-    prompt = (
-        f"Схема базы данных:\n{schema_context}\n\n"
-        f"Вопрос пользователя: {question}\n\n"
-        f"SQL-запрос:"
-    )
+async def generate_sql(
+    question: str,
+    schema_context: str,
+    previous_sql: str | None = None,
+    previous_error: str | None = None,
+) -> str:
+    if previous_sql and previous_error:
+        prompt = (
+            f"Схема базы данных:\n{schema_context}\n\n"
+            f"Вопрос пользователя: {question}\n\n"
+            f"Твоя предыдущая попытка была отклонена:\n{previous_sql}\n\n"
+            f"Причина отказа: {previous_error}\n\n"
+            f"Исправь запрос с учётом этой ошибки. Не повторяй ту же ошибку.\n\n"
+            f"SQL-запрос:"
+        )
+    else:
+        prompt = (
+            f"Схема базы данных:\n{schema_context}\n\n"
+            f"Вопрос пользователя: {question}\n\n"
+            f"SQL-запрос:"
+        )
 
     payload = {
         "model": OLLAMA_MODEL,
