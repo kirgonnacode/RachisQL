@@ -29,6 +29,7 @@ services:
     environment:
       OLLAMA_URL: http://ollama:11434
       CHART_RENDERER_URL: http://chart_renderer:3000
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE}
       # Инлайн-креды для Wren CLI (см. README "Overriding defaults" в docs.getwren.ai) -
       # чтобы не хранить пароль в ~/.wren/profiles.yml внутри образа.
       WREN_CONNECTION_INFO: >-
@@ -40,9 +41,11 @@ services:
         condition: service_started
     volumes:
       - ./logs:/var/log/RachisQL
-      - ./backend/wren:/app/wren   # чтобы `wren context build`, сделанный внутри контейнера, сохранялся на хосте
+      - ./backend/wren:/app/wren                  # чтобы `wren context build`, сделанный внутри контейнера, сохранялся на хосте
       - ./backend/tokens.txt:/app/tokens.txt:ro   # хэши токенов, только для чтения контейнером
+      - hf_cache:/root/.cache/huggingface         # кэш модели эмбеддингов Wren - переживает пересборку образа
     ports:
       - "8001:8000"
 volumes:
   ollama_data:
+  hf_cache:

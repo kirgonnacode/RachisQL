@@ -31,6 +31,7 @@ CHART_RENDERER_URL = os.getenv("CHART_RENDERER_URL", "http://chart_renderer:3000
 WREN_PROJECT_DIR = os.getenv("WREN_PROJECT_DIR", "/app/wren")
 WREN_TIMEOUT_SECONDS = os.getenv("WREN_TIMEOUT_SECONDS", "20")
 WREN_CONNECTION_INFO = os.getenv("WREN_CONNECTION_INFO")    # не обязателен, см. wren_client.py
+WREN_SEARCH_LIMIT = os.getenv("WREN_SEARCH_LIMIT", "15")
 
 # --- Аутентификация ---
 TOKENS_FILE = os.getenv("TOKENS_FILE", "/app/tokens.txt")
@@ -73,6 +74,7 @@ def _validate() -> None:
         "WREN_TIMEOUT_SECONDS": WREN_TIMEOUT_SECONDS,
         "RATE_LIMIT_PER_MINUTE": RATE_LIMIT_PER_MINUTE,
         "DICTIONARY_MATCH_THRESHOLD": DICTIONARY_MATCH_THRESHOLD,
+        "WREN_SEARCH_LIMIT": WREN_SEARCH_LIMIT,
     }
     for name, value in required_ints.items():
         if not value or not str(value).strip():
@@ -119,6 +121,7 @@ WREN_TIMEOUT_SECONDS = int(WREN_TIMEOUT_SECONDS)
 RATE_LIMIT_PER_MINUTE = int(RATE_LIMIT_PER_MINUTE)
 CHART_TIMEZONE_OFFSET_HOURS = int(CHART_TIMEZONE_OFFSET_HOURS)
 DICTIONARY_MATCH_THRESHOLD = int(DICTIONARY_MATCH_THRESHOLD)
+WREN_SEARCH_LIMIT = int(WREN_SEARCH_LIMIT)
 
 DSN = (
     f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}"

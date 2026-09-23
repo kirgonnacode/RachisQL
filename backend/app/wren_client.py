@@ -2,7 +2,7 @@
 import asyncio
 import json
 import os
-from .config import WREN_CONNECTION_INFO, WREN_PROJECT_DIR, WREN_TIMEOUT_SECONDS
+from .config import WREN_CONNECTION_INFO, WREN_PROJECT_DIR, WREN_TIMEOUT_SECONDS, WREN_SEARCH_LIMIT
 from .logging_config import logger
 
 
@@ -52,22 +52,39 @@ async def _run_wren(*args: str) -> tuple[int, str, str]:
     return proc.returncode, stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace")
 
 
-async def fetch_schema_context(question: str, limit: int = 8) -> str:
+async def fetch_relevant_models(question: str) -> list[str]:
     if not _is_configured():
         raise WrenNotConfiguredError("target/mdl.json не найден, wren context build не выполнялся")
 
     code, stdout, stderr = await _run_wren(
-        "memory", "fetch", "-q", question, "-l", str(limit), "--output", "json"
+        "memory", "fetch", "-q", question, "-l", str(WREN_SEARCH_LIMIT),
+        "--threshold", "1", "--output", "json",
     )
+    
     if code != 0:
         logger.warning("wren memory fetch завершился с ошибкой: %s", stderr)
         raise WrenExecutionError(stderr or "wren memory fetch failed")
 
     try:
         data = json.loads(stdout)
-    except json.JSONDecodeError:
-        return stdout
-    return json.dumps(data, ensure_ascii=False, indent=2)
+    except json.JSONDecodeError as e:
+        raise WrenExecutionError(f"Не удалось распарсить JSON от wren memory fetch: {e}")
+
+    results = data.get("results", [])
+    if not isinstance(results, list):
+        raise WrenExecutionError(
+            f"wren memory fetch вернул неожиданный формат results: {type(results).__name__}"
+        )
+
+    seen: set[str] = set()
+    model_names: list[str] = []
+    for item in results:
+        name = item.get("model_name")
+        if name and name not in seen:
+            seen.add(name)
+            model_names.append(name)
+
+    return model_names
 
 
 async def dry_run(sql: str) -> None:
