@@ -52,38 +52,6 @@ def _describe_model(model_name: str) -> str:
     return "\n".join(lines)
 
 
-async def get_schema_context(question: str) -> str:
-    if wren_client.is_configured():
-        try:
-            model_names = await wren_client.fetch_relevant_models(question)
-            if model_names:
-                descriptions = [_describe_model(name) for name in model_names]
-                sample_blocks = await asyncio.gather(*(_fetch_sample_rows(name) for name in model_names))
-                blocks = []
-                for desc, samples in zip(descriptions, sample_blocks):
-                    if desc:
-                        blocks.append(desc)
-                    if samples:
-                        blocks.append(samples)
-                context = "\n\n".join(blocks)
-                sample_count = sum(1 for s in sample_blocks if s)
-                logger.info(
-                    "Схема собрана через wren search: %s (sample rows получены: %d/%d)",
-                    model_names, sample_count, len(model_names),
-                )
-            else:
-                logger.warning("wren search не нашёл релевантных таблиц, fallback на Postgres напрямую")
-                context = await _introspect_postgres()
-        except wren_client.WrenExecutionError as e:
-            logger.warning("wren memory fetch не сработал (%s), fallback на Postgres напрямую", e)
-            context = await _introspect_postgres()
-    else:
-        logger.info("Wren не настроен или недоступен, fallback на Postgres напрямую")
-        context = await _introspect_postgres()
-
-    return context
-
-
 def _quote_ident(ident: str) -> str:
     return '"' + ident.replace('"', '""') + '"'
 
@@ -131,3 +99,35 @@ async def _fetch_sample_rows(model_name: str) -> str:
         lines.append(" | ".join(str(row.get(c)) for c in columns))
 
     return "\n".join(lines)
+
+
+async def get_schema_context(question: str) -> str:
+    if wren_client.is_configured():
+        try:
+            model_names = await wren_client.fetch_relevant_models(question)
+            if model_names:
+                descriptions = [_describe_model(name) for name in model_names]
+                sample_blocks = await asyncio.gather(*(_fetch_sample_rows(name) for name in model_names))
+                blocks = []
+                for desc, samples in zip(descriptions, sample_blocks):
+                    if desc:
+                        blocks.append(desc)
+                    if samples:
+                        blocks.append(samples)
+                context = "\n\n".join(blocks)
+                sample_count = sum(1 for s in sample_blocks if s)
+                logger.info(
+                    "Схема собрана через wren search: %s (sample rows получены: %d/%d)",
+                    model_names, sample_count, len(model_names),
+                )
+            else:
+                logger.warning("wren search не нашёл релевантных таблиц, fallback на Postgres напрямую")
+                context = await _introspect_postgres()
+        except wren_client.WrenExecutionError as e:
+            logger.warning("wren memory fetch не сработал (%s), fallback на Postgres напрямую", e)
+            context = await _introspect_postgres()
+    else:
+        logger.info("Wren не настроен или недоступен, fallback на Postgres напрямую")
+        context = await _introspect_postgres()
+
+    return context
