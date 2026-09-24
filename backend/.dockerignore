@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 .env
 .git
+wren/.wren/
+wren/target/

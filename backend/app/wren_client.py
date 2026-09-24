@@ -78,6 +78,7 @@ async def fetch_relevant_models(question: str) -> list[str]:
 
     seen: set[str] = set()
     model_names: list[str] = []
+    display_names: list[str] = []
     filtered_out: list[str] = []
     for item in results:
         name = item.get("model_name")
@@ -90,15 +91,16 @@ async def fetch_relevant_models(question: str) -> list[str]:
             continue
 
         seen.add(name)
-        model_names.append(f"{name} ({distance:.3f})" if distance is not None else name)
+        model_names.append(name)
+        display_names.append(f"{name} ({distance:.3f})" if distance is not None else name)
 
     logger.info(
         "wren search нашёл: %s%s",
-        model_names,
+        display_names,
         f" | отфильтровано по дистанции: {filtered_out}" if filtered_out else "",
     )
 
-    return [item.get("model_name") for item in results if item.get("model_name") in seen]
+    return model_names
 
 
 async def dry_run(sql: str) -> None:
