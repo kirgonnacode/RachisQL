@@ -3,7 +3,8 @@ from .db import run_internal_query
 from .logging_config import logger
 from pathlib import Path
 import yaml
-from .config import WREN_PROJECT_DIR
+from .config import WREN_PROJECT_DIR, SAMPLE_ROWS_ENABLED, SAMPLE_ROWS_COUNT
+import asyncio
 
 async def _introspect_postgres() -> str:
     rows = await run_internal_query(
@@ -57,7 +58,14 @@ async def get_schema_context(question: str) -> str:
             model_names = await wren_client.fetch_relevant_models(question)
             if model_names:
                 descriptions = [_describe_model(name) for name in model_names]
-                context = "\n\n".join(d for d in descriptions if d)
+                sample_blocks = await asyncio.gather(*(_fetch_sample_rows(name) for name in model_names))
+                blocks = []
+                for desc, samples in zip(descriptions, sample_blocks):
+                    if desc:
+                        blocks.append(desc)
+                    if samples:
+                        blocks.append(samples)
+                context = "\n\n".join(blocks)
                 logger.info("Схема собрана через wren search: %s", model_names)
             else:
                 logger.warning("wren search не нашёл релевантных таблиц, fallback на Postgres напрямую")
@@ -70,3 +78,52 @@ async def get_schema_context(question: str) -> str:
         context = await _introspect_postgres()
 
     return context
+
+
+def _quote_ident(ident: str) -> str:
+    return '"' + ident.replace('"', '""') + '"'
+
+
+async def _fetch_sample_rows(model_name: str) -> str:
+    """
+    ВАЖНО: кладёт реальные значения из БД в промпт LLM. Для таблиц с
+    чувствительными/персональными данными отключается явно через
+    properties.no_sample_rows: true в metadata.yml конкретной модели.
+    """
+    if not SAMPLE_ROWS_ENABLED:
+        return ""
+
+    metadata_file = Path(WREN_PROJECT_DIR) / "models" / model_name / "metadata.yml"
+    if not metadata_file.is_file():
+        return ""
+    try:
+        data = yaml.safe_load(metadata_file.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return ""
+
+    if (data.get("properties") or {}).get("no_sample_rows"):
+        return ""
+
+    table_ref = data.get("table_reference") or {}
+    schema = table_ref.get("schema", "public")
+    table = table_ref.get("table")
+    if not table:
+        return ""
+
+    query = f"SELECT * FROM {_quote_ident(schema)}.{_quote_ident(table)} LIMIT {SAMPLE_ROWS_COUNT}"
+
+    try:
+        rows = await run_internal_query(query)
+    except Exception as e:
+        logger.warning("Не удалось получить sample rows для '%s': %s", model_name, e)
+        return ""
+
+    if not rows:
+        return ""
+
+    columns = list(rows[0].keys())
+    lines = [f"Пример данных из '{model_name}' ({len(rows)} строк):", " | ".join(columns)]
+    for row in rows:
+        lines.append(" | ".join(str(row.get(c)) for c in columns))
+
+    return "\n".join(lines)

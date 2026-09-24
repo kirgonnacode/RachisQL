@@ -47,6 +47,10 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 # --- Настройка порога для словарей ---
 DICTIONARY_MATCH_THRESHOLD = os.getenv("DICTIONARY_MATCH_THRESHOLD", "75")
 
+# --- Настройка sample rows ---
+SAMPLE_ROWS_ENABLED = os.getenv("SAMPLE_ROWS_ENABLED", "false").strip().lower() in ("true", "1", "yes")
+SAMPLE_ROWS_COUNT = os.getenv("SAMPLE_ROWS_COUNT", "1")
+
 
 def _validate() -> None:
     errors: list[str] = []
@@ -77,6 +81,7 @@ def _validate() -> None:
         "DICTIONARY_MATCH_THRESHOLD": DICTIONARY_MATCH_THRESHOLD,
         "WREN_SEARCH_LIMIT": WREN_SEARCH_LIMIT,
         "SQL_MAX_ATTEMPTS": SQL_MAX_ATTEMPTS,
+        "SAMPLE_ROWS_COUNT": SAMPLE_ROWS_COUNT,
     }
     for name, value in required_ints.items():
         if not value or not str(value).strip():
@@ -125,6 +130,7 @@ CHART_TIMEZONE_OFFSET_HOURS = int(CHART_TIMEZONE_OFFSET_HOURS)
 DICTIONARY_MATCH_THRESHOLD = int(DICTIONARY_MATCH_THRESHOLD)
 WREN_SEARCH_LIMIT = int(WREN_SEARCH_LIMIT)
 SQL_MAX_ATTEMPTS = int(SQL_MAX_ATTEMPTS)
+SAMPLE_ROWS_COUNT = int(SAMPLE_ROWS_COUNT)
 
 DSN = (
     f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
