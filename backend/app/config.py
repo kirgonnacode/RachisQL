@@ -33,6 +33,7 @@ WREN_PROJECT_DIR = os.getenv("WREN_PROJECT_DIR", "/app/wren")
 WREN_TIMEOUT_SECONDS = os.getenv("WREN_TIMEOUT_SECONDS", "20")
 WREN_CONNECTION_INFO = os.getenv("WREN_CONNECTION_INFO")    # не обязателен, см. wren_client.py
 WREN_SEARCH_LIMIT = os.getenv("WREN_SEARCH_LIMIT", "15")
+WREN_SEARCH_MAX_DISTANCE = os.getenv("WREN_SEARCH_MAX_DISTANCE", "")
 
 # --- Аутентификация ---
 TOKENS_FILE = os.getenv("TOKENS_FILE", "/app/tokens.txt")
@@ -90,6 +91,14 @@ def _validate() -> None:
         if not str(value).strip().isdigit():
             errors.append(f"{name} должен быть числом, получили: '{value}'")
 
+    if WREN_SEARCH_MAX_DISTANCE.strip():
+        try:
+            float(WREN_SEARCH_MAX_DISTANCE)
+        except ValueError:
+            errors.append(
+                f"WREN_SEARCH_MAX_DISTANCE должен быть числом или пустым, получили: '{WREN_SEARCH_MAX_DISTANCE}'"
+            )            
+
     if not CHART_TIMEZONE_OFFSET_HOURS.strip().lstrip("-").isdigit():
         errors.append(
             f"CHART_TIMEZONE_OFFSET_HOURS должен быть целым числом (можно "
@@ -131,6 +140,7 @@ DICTIONARY_MATCH_THRESHOLD = int(DICTIONARY_MATCH_THRESHOLD)
 WREN_SEARCH_LIMIT = int(WREN_SEARCH_LIMIT)
 SQL_MAX_ATTEMPTS = int(SQL_MAX_ATTEMPTS)
 SAMPLE_ROWS_COUNT = int(SAMPLE_ROWS_COUNT)
+WREN_SEARCH_MAX_DISTANCE = float(WREN_SEARCH_MAX_DISTANCE) if WREN_SEARCH_MAX_DISTANCE.strip() else None
 
 DSN = (
     f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}"

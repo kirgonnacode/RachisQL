@@ -2,7 +2,7 @@
 import asyncio
 import json
 import os
-from .config import WREN_CONNECTION_INFO, WREN_PROJECT_DIR, WREN_TIMEOUT_SECONDS, WREN_SEARCH_LIMIT
+from .config import WREN_CONNECTION_INFO, WREN_PROJECT_DIR, WREN_TIMEOUT_SECONDS, WREN_SEARCH_LIMIT, WREN_SEARCH_MAX_DISTANCE
 from .logging_config import logger
 
 
@@ -78,13 +78,27 @@ async def fetch_relevant_models(question: str) -> list[str]:
 
     seen: set[str] = set()
     model_names: list[str] = []
+    filtered_out: list[str] = []
     for item in results:
         name = item.get("model_name")
-        if name and name not in seen:
-            seen.add(name)
-            model_names.append(name)
+        if not name or name in seen:
+            continue
+        distance = item.get("_distance")
 
-    return model_names
+        if WREN_SEARCH_MAX_DISTANCE is not None and distance is not None and distance > WREN_SEARCH_MAX_DISTANCE:
+            filtered_out.append(f"{name} ({distance:.3f})")
+            continue
+
+        seen.add(name)
+        model_names.append(f"{name} ({distance:.3f})" if distance is not None else name)
+
+    logger.info(
+        "wren search нашёл: %s%s",
+        model_names,
+        f" | отфильтровано по дистанции: {filtered_out}" if filtered_out else "",
+    )
+
+    return [item.get("model_name") for item in results if item.get("model_name") in seen]
 
 
 async def dry_run(sql: str) -> None:

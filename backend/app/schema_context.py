@@ -66,7 +66,11 @@ async def get_schema_context(question: str) -> str:
                     if samples:
                         blocks.append(samples)
                 context = "\n\n".join(blocks)
-                logger.info("Схема собрана через wren search: %s", model_names)
+                sample_count = sum(1 for s in sample_blocks if s)
+                logger.info(
+                    "Схема собрана через wren search: %s (sample rows получены: %d/%d)",
+                    model_names, sample_count, len(model_names),
+                )
             else:
                 logger.warning("wren search не нашёл релевантных таблиц, fallback на Postgres напрямую")
                 context = await _introspect_postgres()
