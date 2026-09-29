@@ -52,6 +52,10 @@ DICTIONARY_MATCH_THRESHOLD = os.getenv("DICTIONARY_MATCH_THRESHOLD", "75")
 SAMPLE_ROWS_ENABLED = os.getenv("SAMPLE_ROWS_ENABLED", "false").strip().lower() in ("true", "1", "yes")
 SAMPLE_ROWS_COUNT = os.getenv("SAMPLE_ROWS_COUNT", "1")
 
+# --- Настройка обратной связи ---
+QUERY_CACHE_MAX_SIZE = os.getenv("QUERY_CACHE_MAX_SIZE", "500")
+RECALL_EXAMPLES_LIMIT = os.getenv("RECALL_EXAMPLES_LIMIT", "3")
+RECALL_MAX_DISTANCE = os.getenv("RECALL_MAX_DISTANCE", "")
 
 def _validate() -> None:
     errors: list[str] = []
@@ -83,6 +87,8 @@ def _validate() -> None:
         "WREN_SEARCH_LIMIT": WREN_SEARCH_LIMIT,
         "SQL_MAX_ATTEMPTS": SQL_MAX_ATTEMPTS,
         "SAMPLE_ROWS_COUNT": SAMPLE_ROWS_COUNT,
+        "QUERY_CACHE_MAX_SIZE": QUERY_CACHE_MAX_SIZE,
+        "RECALL_EXAMPLES_LIMIT": RECALL_EXAMPLES_LIMIT,
     }
     for name, value in required_ints.items():
         if not value or not str(value).strip():
@@ -98,6 +104,12 @@ def _validate() -> None:
             errors.append(
                 f"WREN_SEARCH_MAX_DISTANCE должен быть числом или пустым, получили: '{WREN_SEARCH_MAX_DISTANCE}'"
             )            
+
+    if RECALL_MAX_DISTANCE.strip():
+        try:
+            float(RECALL_MAX_DISTANCE)
+        except ValueError:
+            errors.append(f"RECALL_MAX_DISTANCE должен быть числом или пустым, получили: '{RECALL_MAX_DISTANCE}'")            
 
     if not CHART_TIMEZONE_OFFSET_HOURS.strip().lstrip("-").isdigit():
         errors.append(
@@ -141,6 +153,9 @@ WREN_SEARCH_LIMIT = int(WREN_SEARCH_LIMIT)
 SQL_MAX_ATTEMPTS = int(SQL_MAX_ATTEMPTS)
 SAMPLE_ROWS_COUNT = int(SAMPLE_ROWS_COUNT)
 WREN_SEARCH_MAX_DISTANCE = float(WREN_SEARCH_MAX_DISTANCE) if WREN_SEARCH_MAX_DISTANCE.strip() else None
+QUERY_CACHE_MAX_SIZE = int(QUERY_CACHE_MAX_SIZE)
+RECALL_EXAMPLES_LIMIT = int(RECALL_EXAMPLES_LIMIT)
+RECALL_MAX_DISTANCE = float(RECALL_MAX_DISTANCE) if RECALL_MAX_DISTANCE.strip() else None
 
 DSN = (
     f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}"

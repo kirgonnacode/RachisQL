@@ -3,7 +3,7 @@ from .db import run_internal_query
 from .logging_config import logger
 from pathlib import Path
 import yaml
-from .config import WREN_PROJECT_DIR, SAMPLE_ROWS_ENABLED, SAMPLE_ROWS_COUNT
+from .config import WREN_PROJECT_DIR, SAMPLE_ROWS_ENABLED, SAMPLE_ROWS_COUNT, RECALL_MAX_DISTANCE
 import asyncio
 
 async def _introspect_postgres() -> str:
@@ -130,4 +130,51 @@ async def get_schema_context(question: str) -> str:
         logger.info("Wren не настроен или недоступен, fallback на Postgres напрямую")
         context = await _introspect_postgres()
 
+    if wren_client.is_configured():
+        examples = await _recall_examples_text(question)
+        if examples:
+            context = f"{context}\n\n### {examples}"
+
     return context
+
+
+async def _recall_examples_text(question: str) -> str:
+    try:
+        examples = await wren_client.recall_examples(question)
+    except wren_client.WrenExecutionError as e:
+        logger.warning("wren memory recall не сработал (%s), пропускаю", e)
+        return ""
+
+    if not examples:
+        return ""
+
+    kept = []
+    filtered_out = []
+    for ex in examples:
+        nl = ex.get("nl_query", "")
+        sql = ex.get("sql_query", "")
+        if not nl or not sql:
+            continue
+
+        distance = ex.get("_distance")
+        if RECALL_MAX_DISTANCE is not None and distance is not None and distance > RECALL_MAX_DISTANCE:
+            filtered_out.append(f"{nl!r} ({distance:.3f})")
+            continue
+
+        label = f"{nl!r} ({distance:.3f})" if distance is not None else f"{nl!r} (score={ex.get('score')})"
+        kept.append(label)
+        examples_text = f'Вопрос: "{nl}"\nSQL: {sql}'
+        kept[-1] = (label, examples_text)
+
+    logger.info(
+        "wren recall нашёл примеров: %d%s",
+        len(kept),
+        f" | отфильтровано по дистанции: {filtered_out}" if filtered_out else "",
+    )
+
+    if not kept:
+        return ""
+
+    lines = ["Подтверждённые примеры похожих вопросов (используй как образец):"]
+    lines.extend(text for _, text in kept)
+    return "\n\n".join(lines)

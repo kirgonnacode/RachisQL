@@ -1,4 +1,4 @@
-# RachisQL: Text2SQL API-бэкенд для локальных LLM (v0.4.5)
+# RachisQL: Text2SQL API-бэкенд для локальных LLM (v0.5.6)
 
 Своя реализация text-to-SQL: локальная LLM (Ollama) генерирует SQL,
 guard разрешает только read-only запросы, PostgreSQL выполняет,

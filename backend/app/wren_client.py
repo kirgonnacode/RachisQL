@@ -2,7 +2,7 @@
 import asyncio
 import json
 import os
-from .config import WREN_CONNECTION_INFO, WREN_PROJECT_DIR, WREN_TIMEOUT_SECONDS, WREN_SEARCH_LIMIT, WREN_SEARCH_MAX_DISTANCE
+from .config import WREN_CONNECTION_INFO, WREN_PROJECT_DIR, WREN_TIMEOUT_SECONDS, WREN_SEARCH_LIMIT, WREN_SEARCH_MAX_DISTANCE, RECALL_EXAMPLES_LIMIT
 from .logging_config import logger
 
 
@@ -103,6 +103,31 @@ async def fetch_relevant_models(question: str) -> list[str]:
     return model_names
 
 
+async def recall_examples(question: str) -> list[dict]:
+    if not _is_configured():
+        raise WrenNotConfiguredError("target/mdl.json не найден")
+
+    code, stdout, stderr = await _run_wren(
+        "memory", "recall", "-q", question, "-l", str(RECALL_EXAMPLES_LIMIT), "--output", "json"
+    )
+    if code != 0:
+        raise WrenExecutionError(stderr or "wren memory recall failed")
+
+    stdout = stdout.strip()
+    if not stdout or stdout == "No results found.":
+        return []
+
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError as e:
+        raise WrenExecutionError(f"Не удалось распарсить JSON от wren memory recall: {e}")
+
+    if not isinstance(data, list):
+        raise WrenExecutionError(f"wren memory recall вернул не список: {type(data).__name__}")
+
+    return data
+
+
 async def dry_run(sql: str) -> None:
     if not _is_configured():
         raise WrenNotConfiguredError("target/mdl.json не найден")
@@ -140,6 +165,15 @@ async def execute(sql: str, limit: int) -> list[dict]:
             )
         rows.append(row)
     return rows
+
+
+async def store_example(question: str, sql: str) -> None:
+    if not _is_configured():
+        raise WrenNotConfiguredError("target/mdl.json не найден")
+
+    code, stdout, stderr = await _run_wren("memory", "store", "--nl", question, "--sql", sql)
+    if code != 0:
+        raise WrenExecutionError(stderr or "wren memory store failed")   
 
 
 def is_configured() -> bool:

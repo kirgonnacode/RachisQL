@@ -2,6 +2,7 @@ import datetime
 from decimal import Decimal
 from typing import Any
 from .config import CHART_TIMEZONE_OFFSET_HOURS
+import re
 
 _MS_TIMESTAMP_MIN = 946684800000   # 2000-01-01
 _MS_TIMESTAMP_MAX = 4102444800000  # 2100-01-01
@@ -10,6 +11,20 @@ _MONTH_ABBR_RU = {
     1: "Янв", 2: "Фев", 3: "Мар", 4: "Апр", 5: "Май", 6: "Июн",
     7: "Июл", 8: "Авг", 9: "Сен", 10: "Окт", 11: "Ноя", 12: "Дек",
 }
+
+_PROPORTION_PATTERNS = [
+    re.compile(r"\bдол[яию]\b", re.IGNORECASE),
+    re.compile(r"\bдолей\b", re.IGNORECASE),
+    re.compile(r"\bпроцент", re.IGNORECASE),
+    re.compile(r"\bраспредел", re.IGNORECASE),
+    re.compile(r"\bструктур", re.IGNORECASE),
+    re.compile(r"\bсоотношени", re.IGNORECASE),
+    re.compile(r"\bудельный\s+вес", re.IGNORECASE),
+]
+
+_COLORS = ['#3D75E4', '#57A003', '#7537F2', '#4FC731', '#F7BA59', '#D62525', '#779EEC', '#BC64DF', '#64C8DF', '#89BD4F']
+
+_PIE_COLORS = ['#3D75E4', '#57A003', '#7537F2', '#4FC731', '#F7BA59', '#D62525']
 
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float, Decimal)) and not isinstance(value, bool)
@@ -75,13 +90,87 @@ def _truncate(text: str, max_len: int) -> str:
         truncated = text[:max_len]
     return truncated + "…"
 
+
+def _build_text_card_option(question: str, rows: list[dict]) -> dict:
+    row = rows[0]
+    lines = []
+    for col, value in row.items():
+        display = _to_json_number(value) if _is_number(value) else value
+        lines.append(f"{col}: {display}")
+
+    return {
+        "title": {"text": _truncate(question, 60), "left": "center", "top": 20, "textStyle": {"fontSize": 14}},
+        "graphic": {
+            "type": "text",
+            "left": "center",
+            "top": "middle",
+            "style": {
+                "text": "\n".join(lines),
+                "fontSize": 32,
+                "fontWeight": "bold",
+                "fill": "#181818",
+                "textAlign": "center",
+                "lineHeight": 44,
+            },
+        },
+    }
+
+def _mentions_proportion(question: str) -> bool:
+    return any(p.search(question) for p in _PROPORTION_PATTERNS)
+
+def _should_use_pie(category_col: str | None, category_is_timestamp: bool, numeric_cols: list[str], num_rows: int, question: str) -> bool:
+    if category_col is None or category_is_timestamp:
+        return False
+    if len(numeric_cols) != 1:
+        return False
+    if not (2 <= num_rows <= 6):
+        return False
+    return _mentions_proportion(question)
+
+
+def _build_pie_option(question: str, categories: list[str], metric_name: str, rows: list[dict]) -> dict:
+    data = [
+        {"value": _to_json_number(row.get(metric_name)) or 0, "name": cat}
+        for cat, row in zip(categories, rows)
+    ]
+    return {
+        "title": {"text": _truncate(question, 60), "left": "center", "textStyle": {"fontSize": 14}},
+        "tooltip": {"trigger": "item", "formatter": "{b}: {c} ({d}%)"},
+        "color": _PIE_COLORS,
+        "legend": {"icon": "circle", "orient": "horizontal", "bottom": 0, "data": categories},
+        "series": [
+            {
+                "name": metric_name,
+                "type": "pie",
+                "radius": "60%",
+                "center": ["50%", "48%"],
+                "data": data,
+                "label": {"formatter": "{b}\n{d}%"},
+            }
+        ],
+    }
+
+
+def _needs_dual_axis(series_raw_values: list[list[float]]) -> bool:
+    if len(series_raw_values) != 2:
+        return False
+    maxes = [max((abs(v) for v in vals), default=0) for vals in series_raw_values]
+    if maxes[0] == 0 or maxes[1] == 0:
+        return False
+    return max(maxes) / min(maxes) >= 10
+
 def build_chart_option(rows: list[dict], question: str) -> dict | None:
+
     if not rows:
         return None
 
     columns = list(rows[0].keys())
+
     if not columns:
         return None
+    
+    if len(rows) == 1:
+        return _build_text_card_option(question, rows)
 
     category_col = None
     category_is_timestamp = False
@@ -117,13 +206,17 @@ def build_chart_option(rows: list[dict], question: str) -> dict | None:
     else:
         categories = [_truncate(str(row.get(category_col)), 20) for row in rows]
 
+    if _should_use_pie(category_col, category_is_timestamp, numeric_cols, len(rows), question):
+        return _build_pie_option(question, categories, numeric_cols[0], rows)        
+
     chart_type = "line" if len(categories) > 15 else "bar"
 
+    series_raw_values = [[_to_json_number(row.get(col)) or 0 for row in rows] for col in numeric_cols]
+    dual_axis = _needs_dual_axis(series_raw_values)
+
     series = []
-    all_numeric_values: list[float] = []
-    for col in numeric_cols:
-        raw_values = [_to_json_number(row.get(col)) or 0 for row in rows]
-        all_numeric_values.extend(raw_values)
+    for i, col in enumerate(numeric_cols):
+        raw_values = series_raw_values[i]
         data_points = [
             {"value": v, "label": {"show": False}} if v == 0 else v
             for v in raw_values
@@ -139,19 +232,36 @@ def build_chart_option(rows: list[dict], question: str) -> dict | None:
         if chart_type == "line":
             entry["smooth"] = True
             entry["areaStyle"] = {"opacity": 0.15}
+        if dual_axis:
+            entry["yAxisIndex"] = i
         series.append(entry)
+
+    if dual_axis:
+        y_axis = [
+            {
+                "type": "value", "min": 0,
+                "max": max(vals) * 1.15 if max(vals) > 0 else None,
+                "position": "left" if i == 0 else "right",
+                "splitLine": {"show": i == 0},
+            }
+            for i, vals in enumerate(series_raw_values)
+        ]
+    else:
+        all_values = [v for vals in series_raw_values for v in vals]
+        y_max = max(all_values) * 1.15 if all_values and max(all_values) > 0 else None
+        y_axis = {"type": "value", "min": 0, "max": y_max}        
 
     option = {
         "title": {"text": _truncate(question, 60), "left": "center", "textStyle": {"fontSize": 14}},
         "tooltip": {"trigger": "axis"},
-        "color": ['#3D75E4', '#57A003', '#7537F2', '#4FC731', '#F7BA59', '#D62525', '#779EEC', '#BC64DF', '#64C8DF', '#89BD4F'],
-        "grid": {"top": 70, "left": 50, "right": 30, "bottom": 60, "containLabel": True},
+        "color": _COLORS,
+        "grid": {"top": 70, "left": 50, "right": 30 if not dual_axis else 60, "bottom": 60, "containLabel": True},
         "xAxis": {
             "type": "category",
             "data": categories,
             "axisLabel": {"rotate": 30 if len(categories) > 8 and "\n" not in "".join(categories) else 0},
         },
-        "yAxis": {"type": "value"},
+        "yAxis": y_axis,
         "series": series,
     }
 

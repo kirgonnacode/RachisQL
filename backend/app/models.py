@@ -1,5 +1,5 @@
 
-from typing import Any
+from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
@@ -22,3 +22,8 @@ class AskResponse(BaseModel):
 class ErrorResponse(BaseModel):
     detail: str
     generated_sql: str | None = None
+    
+
+class FeedbackRequest(BaseModel):
+    query_id: str = Field(..., min_length=1, max_length=64)
+    rating: Literal["up", "down"]    

@@ -1,4 +1,4 @@
-# --- RachisQL Версия: 0.4.5 ---
+# --- RachisQL Версия: 0.5.6 ---
 
 
 
@@ -6,7 +6,7 @@ import time
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.responses import JSONResponse
-from . import wren_client
+from . import wren_client, query_cache
 from .auth import require_auth
 from .chart_builder import build_chart_option
 from .chart_client import ChartRenderError, render_png
@@ -14,7 +14,7 @@ from .config import MAX_ROWS, SQL_MAX_ATTEMPTS
 from .db import check_db_connection, close_pool, init_pool, run_readonly_query
 from .llm_client import generate_sql
 from .logging_config import logger
-from .models import AskRequest, AskResponse, ErrorResponse
+from .models import AskRequest, AskResponse, ErrorResponse, FeedbackRequest
 from .rate_limit import RateLimitExceeded, check_rate_limit
 from .schema_context import get_schema_context
 from .sql_guard import UnsafeSQLError, validate_and_sanitize
@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="RachisQL", version="0.4.5", lifespan=lifespan)
+app = FastAPI(title="RachisQL", version="0.5.6", lifespan=lifespan)
 
 ERROR_RESPONSES = {
     401: {"model": ErrorResponse, "description": "Нет или невалиден Bearer-токен"},
@@ -63,7 +63,7 @@ async def health():
     return JSONResponse(status_code=200 if db_ok else 503, content=payload)
 
 
-async def _generate_and_validate_sql(question: str) -> str:
+async def _generate_and_execute_sql(question: str) -> tuple[str, list[dict]]:
     try:
         schema_context = await get_schema_context(question)
     except Exception as e:
@@ -74,6 +74,7 @@ async def _generate_and_validate_sql(question: str) -> str:
     previous_error: str | None = None
     last_raw_sql = ""
     last_error_detail = ""
+    last_safe_sql = ""
 
     for attempt in range(1, SQL_MAX_ATTEMPTS + 1):
         try:
@@ -90,26 +91,51 @@ async def _generate_and_validate_sql(question: str) -> str:
             logger.warning("Попытка %d: guard отклонил SQL: %s | причина: %s", attempt, raw_sql, e)
             previous_sql, previous_error = raw_sql, str(e)
             last_error_detail = f"Сгенерированный SQL отклонён guard'ом: {e}"
+            last_safe_sql = ""
             continue
 
         safe_sql = resolve_dictionary_values(safe_sql)
 
-        if not wren_client.is_configured():
-            return safe_sql
+        if wren_client.is_configured():
+            try:
+                await wren_client.dry_run(safe_sql)
+            except wren_client.WrenValidationError as e:
+                logger.warning("Попытка %d: Wren dry-run отклонил SQL: %s | причина: %s", attempt, safe_sql, e)
+                previous_sql, previous_error = safe_sql, str(e)
+                last_error_detail = f"Запрос не соответствует модели данных (Wren): {e}"
+                last_safe_sql = ""
+                continue
+            except wren_client.WrenExecutionError as e:
+                logger.warning("Wren dry-run недоступен (%s), продолжаю без семантической валидации", e)
 
         try:
-            await wren_client.dry_run(safe_sql)
+            rows = await _execute_sql(safe_sql)
+        except Exception as e:
+            logger.warning("Попытка %d: ошибка выполнения SQL '%s': %s", attempt, safe_sql, e)
+            previous_sql, previous_error = safe_sql, str(e)
+            last_error_detail = f"Ошибка выполнения запроса: {e}"
+            last_safe_sql = ""
+            continue
+
+        if rows:
             if attempt > 1:
                 logger.info("SQL успешно исправлен с попытки %d/%d", attempt, SQL_MAX_ATTEMPTS)
-            return safe_sql
-        except wren_client.WrenValidationError as e:
-            logger.warning("Попытка %d: Wren dry-run отклонил SQL: %s | причина: %s", attempt, safe_sql, e)
-            previous_sql, previous_error = safe_sql, str(e)
-            last_error_detail = f"Запрос не соответствует модели данных (Wren): {e}"
-            continue
-        except wren_client.WrenExecutionError as e:
-            logger.warning("Wren dry-run недоступен (%s), продолжаю без семантической валидации", e)
-            return safe_sql
+            return safe_sql, rows
+
+        logger.warning("Попытка %d: запрос выполнился, но вернул 0 строк", attempt)
+        last_safe_sql = safe_sql
+        last_error_detail = "Запрос выполнился, но не вернул данных"
+        previous_sql = safe_sql
+        previous_error = (
+            "Запрос выполнился успешно, но вернул 0 строк. Проверь точное "
+            "написание значений в WHERE (регистр, формат даты, опечатки) и "
+            "правильную ли таблицу/колонку используешь. Если данные "
+            "действительно могут отсутствовать за этот период - оставь запрос как есть."
+        )
+
+    if last_safe_sql:
+        logger.info("После %d попыток запрос стабильно возвращает 0 строк - отдаю как валидный пустой результат", SQL_MAX_ATTEMPTS)
+        return last_safe_sql, []
 
     raise HTTPException(422, detail=_error(last_error_detail, generated_sql=last_raw_sql))
 
@@ -129,13 +155,7 @@ async def ask(request: AskRequest, consumer: str = Depends(authenticated_consume
     started_at = time.monotonic()
     logger.info("Новый вопрос от '%s': %s", consumer, request.question)
 
-    safe_sql = await _generate_and_validate_sql(request.question)
-
-    try:
-        rows = await _execute_sql(safe_sql)
-    except Exception as e:
-        logger.error("Ошибка выполнения SQL '%s': %s", safe_sql, e)
-        raise HTTPException(500, detail=_error(f"Ошибка выполнения запроса: {e}", generated_sql=safe_sql))
+    safe_sql, rows = await _generate_and_execute_sql(request.question)
 
     elapsed = time.monotonic() - started_at
     logger.info("Вопрос обработан за %.2fс, строк: %d", elapsed, len(rows))
@@ -153,25 +173,45 @@ async def ask(request: AskRequest, consumer: str = Depends(authenticated_consume
     responses={
         200: {"content": {"image/png": {}}, "description": "PNG с графиком"},
         **ERROR_RESPONSES,
-        502: {"model": ErrorResponse, "description": "chart_renderer недоступен"},
+        502: {"model": ErrorResponse, "description": "chart-renderer недоступен"},
     },
 )
+
+
+@app.post("/feedback", responses=ERROR_RESPONSES)
+async def feedback(request: FeedbackRequest, consumer: str = Depends(authenticated_consumer)):
+    cached = query_cache.get(request.query_id)
+    if cached is None:
+        raise HTTPException(
+            404,
+            detail=_error("Запрос не найден. Возможно запрос устарел или был очищен из памяти при рестарте RachisQL"),
+        )
+
+    question, sql = cached["question"], cached["sql"]
+
+    if request.rating == "up":
+        try:
+            await wren_client.store_example(question, sql)
+            logger.info("Пример сохранён (👍 от '%s'): %s", consumer, question)
+        except wren_client.WrenExecutionError as e:
+            logger.warning("Не удалось сохранить пример в Wren memory: %s", e)
+    else:
+        logger.warning("Плохая оценка (👎 от '%s') | вопрос: %s | SQL: %s", consumer, question, sql)
+
+    return {"status": "ok"}
+
+
 async def ask_image(request: AskRequest, consumer: str = Depends(authenticated_consumer)):
     logger.info("Новый запрос графика от '%s': %s", consumer, request.question)
-    safe_sql = await _generate_and_validate_sql(request.question)
 
-    try:
-        rows = await _execute_sql(safe_sql)
-    except Exception as e:
-        raise HTTPException(500, detail=_error(f"Ошибка выполнения запроса: {e}", generated_sql=safe_sql))
+    safe_sql, rows = await _generate_and_execute_sql(request.question)
 
     option = build_chart_option(rows, request.question)
     if option is None:
         raise HTTPException(
             422,
             detail=_error(
-                "Результат запроса не подходит для визуализации (нет числовых колонок или данных). "
-                f"Сырые данные: {rows[:5]}",
+                "Результат запроса не подходит для визуализации (нет числовых колонок или данных).",
                 generated_sql=safe_sql,
             ),
         )
@@ -180,5 +220,6 @@ async def ask_image(request: AskRequest, consumer: str = Depends(authenticated_c
         png_bytes = await render_png(option)
     except ChartRenderError as e:
         raise HTTPException(502, detail=_error(f"Сервис рендера графиков недоступен: {e}", generated_sql=safe_sql))
-
-    return Response(content=png_bytes, media_type="image/png")
+    
+    query_id = query_cache.store(request.question, safe_sql)
+    return Response(content=png_bytes, media_type="image/png", headers={"X-Query-Id": query_id})
