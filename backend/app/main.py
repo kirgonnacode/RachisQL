@@ -1,4 +1,4 @@
-# --- RachisQL Версия: 0.5.6 ---
+# --- RachisQL Версия: 0.5.7 ---
 
 
 
@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="RachisQL", version="0.5.6", lifespan=lifespan)
+app = FastAPI(title="RachisQL", version="0.5.7", lifespan=lifespan)
 
 ERROR_RESPONSES = {
     401: {"model": ErrorResponse, "description": "Нет или невалиден Bearer-токен"},
@@ -176,6 +176,28 @@ async def ask(request: AskRequest, consumer: str = Depends(authenticated_consume
         502: {"model": ErrorResponse, "description": "chart-renderer недоступен"},
     },
 )
+async def ask_image(request: AskRequest, consumer: str = Depends(authenticated_consumer)):
+    logger.info("Новый запрос графика от '%s': %s", consumer, request.question)
+
+    safe_sql, rows = await _generate_and_execute_sql(request.question)
+
+    option = build_chart_option(rows, request.question)
+    if option is None:
+        raise HTTPException(
+            422,
+            detail=_error(
+                "Результат запроса не подходит для визуализации (нет числовых колонок или данных).",
+                generated_sql=safe_sql,
+            ),
+        )
+
+    try:
+        png_bytes = await render_png(option)
+    except ChartRenderError as e:
+        raise HTTPException(502, detail=_error(f"Сервис рендера графиков недоступен: {e}", generated_sql=safe_sql))
+    
+    query_id = query_cache.store(request.question, safe_sql)
+    return Response(content=png_bytes, media_type="image/png", headers={"X-Query-Id": query_id})
 
 
 @app.post("/feedback", responses=ERROR_RESPONSES)
@@ -199,27 +221,3 @@ async def feedback(request: FeedbackRequest, consumer: str = Depends(authenticat
         logger.warning("Плохая оценка (👎 от '%s') | вопрос: %s | SQL: %s", consumer, question, sql)
 
     return {"status": "ok"}
-
-
-async def ask_image(request: AskRequest, consumer: str = Depends(authenticated_consumer)):
-    logger.info("Новый запрос графика от '%s': %s", consumer, request.question)
-
-    safe_sql, rows = await _generate_and_execute_sql(request.question)
-
-    option = build_chart_option(rows, request.question)
-    if option is None:
-        raise HTTPException(
-            422,
-            detail=_error(
-                "Результат запроса не подходит для визуализации (нет числовых колонок или данных).",
-                generated_sql=safe_sql,
-            ),
-        )
-
-    try:
-        png_bytes = await render_png(option)
-    except ChartRenderError as e:
-        raise HTTPException(502, detail=_error(f"Сервис рендера графиков недоступен: {e}", generated_sql=safe_sql))
-    
-    query_id = query_cache.store(request.question, safe_sql)
-    return Response(content=png_bytes, media_type="image/png", headers={"X-Query-Id": query_id})
