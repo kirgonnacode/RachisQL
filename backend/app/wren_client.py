@@ -4,6 +4,7 @@ import json
 import os
 from .config import WREN_CONNECTION_INFO, WREN_PROJECT_DIR, WREN_TIMEOUT_SECONDS, WREN_SEARCH_LIMIT, WREN_SEARCH_MAX_DISTANCE, RECALL_EXAMPLES_LIMIT
 from .logging_config import logger
+import time
 
 
 def _connection_flags() -> list[str]:
@@ -29,6 +30,7 @@ def _is_configured() -> bool:
 
 
 async def _run_wren(*args: str) -> tuple[int, str, str]:
+    started_at = time.monotonic()
     try:
         proc = await asyncio.create_subprocess_exec(
             "wren",
@@ -48,6 +50,9 @@ async def _run_wren(*args: str) -> tuple[int, str, str]:
         proc.kill()
         await proc.wait()
         raise WrenExecutionError(f"wren {args[0]} превысил таймаут {WREN_TIMEOUT_SECONDS}с")
+
+    command = " ".join(args[:2]) if args[0] == "memory" else args[0]
+    logger.info("wren %s: %.2fс (код %s)", command, time.monotonic() - started_at, proc.returncode)    
 
     return proc.returncode, stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace")
 

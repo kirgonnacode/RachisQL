@@ -5,6 +5,7 @@ from pathlib import Path
 import yaml
 from .config import WREN_PROJECT_DIR, SAMPLE_ROWS_ENABLED, SAMPLE_ROWS_COUNT, RECALL_MAX_DISTANCE
 import asyncio
+import time
 
 async def _introspect_postgres() -> str:
     rows = await run_internal_query(
@@ -101,41 +102,37 @@ async def _fetch_sample_rows(model_name: str) -> str:
     return "\n".join(lines)
 
 
-async def get_schema_context(question: str) -> str:
-    if wren_client.is_configured():
-        try:
-            model_names = await wren_client.fetch_relevant_models(question)
-            if model_names:
-                descriptions = [_describe_model(name) for name in model_names]
-                sample_blocks = await asyncio.gather(*(_fetch_sample_rows(name) for name in model_names))
-                blocks = []
-                for desc, samples in zip(descriptions, sample_blocks):
-                    if desc:
-                        blocks.append(desc)
-                    if samples:
-                        blocks.append(samples)
-                context = "\n\n".join(blocks)
-                sample_count = sum(1 for s in sample_blocks if s)
-                logger.info(
-                    "Схема собрана через wren search: %s (sample rows получены: %d/%d)",
-                    model_names, sample_count, len(model_names),
-                )
-            else:
-                logger.warning("wren search не нашёл релевантных таблиц, fallback на Postgres напрямую")
-                context = await _introspect_postgres()
-        except wren_client.WrenExecutionError as e:
-            logger.warning("wren memory fetch не сработал (%s), fallback на Postgres напрямую", e)
-            context = await _introspect_postgres()
-    else:
+async def _build_models_context(question: str) -> str:
+    if not wren_client.is_configured():
         logger.info("Wren не настроен или недоступен, fallback на Postgres напрямую")
-        context = await _introspect_postgres()
+        return await _introspect_postgres()
 
-    if wren_client.is_configured():
-        examples = await _recall_examples_text(question)
-        if examples:
-            context = f"{context}\n\n### {examples}"
+    try:
+        model_names = await wren_client.fetch_relevant_models(question)
+    except wren_client.WrenExecutionError as e:
+        logger.warning("wren memory fetch не сработал (%s), fallback на Postgres напрямую", e)
+        return await _introspect_postgres()
 
-    return context
+    if not model_names:
+        logger.warning("wren search не нашёл релевантных таблиц, fallback на Postgres напрямую")
+        return await _introspect_postgres()
+
+    descriptions = [_describe_model(name) for name in model_names]
+    sample_blocks = await asyncio.gather(*(_fetch_sample_rows(name) for name in model_names))
+
+    blocks = []
+    for desc, samples in zip(descriptions, sample_blocks):
+        if desc:
+            blocks.append(desc)
+        if samples:
+            blocks.append(samples)
+
+    sample_count = sum(1 for s in sample_blocks if s)
+    logger.info(
+        "Схема собрана через wren search: %s (sample rows получены: %d/%d)",
+        model_names, sample_count, len(model_names),
+    )
+    return "\n\n".join(blocks)
 
 
 async def _recall_examples_text(question: str) -> str:
@@ -148,8 +145,10 @@ async def _recall_examples_text(question: str) -> str:
     if not examples:
         return ""
 
-    kept = []
-    filtered_out = []
+
+    kept_labels: list[str] = []
+    kept_texts: list[str] = []
+    filtered_out: list[str] = []
     for ex in examples:
         nl = ex.get("nl_query", "")
         sql = ex.get("sql_query", "")
@@ -161,20 +160,37 @@ async def _recall_examples_text(question: str) -> str:
             filtered_out.append(f"{nl!r} ({distance:.3f})")
             continue
 
-        label = f"{nl!r} ({distance:.3f})" if distance is not None else f"{nl!r} (score={ex.get('score')})"
-        kept.append(label)
-        examples_text = f'Вопрос: "{nl}"\nSQL: {sql}'
-        kept[-1] = (label, examples_text)
+        kept_labels.append(f"{nl!r} ({distance:.3f})" if distance is not None else f"{nl!r} (score={ex.get('score')})")
+        kept_texts.append(f'Вопрос: "{nl}"\nSQL: {sql}')
 
     logger.info(
-        "wren recall нашёл примеров: %d%s",
-        len(kept),
+        "wren recall нашёл примеров: %d %s%s",
+        len(kept_texts),
+        kept_labels,
         f" | отфильтровано по дистанции: {filtered_out}" if filtered_out else "",
     )
 
-    if not kept:
+    if not kept_texts:
         return ""
 
     lines = ["Подтверждённые примеры похожих вопросов (используй как образец):"]
-    lines.extend(text for _, text in kept)
+    lines.extend(kept_texts)
     return "\n\n".join(lines)
+
+
+async def get_schema_context(question: str) -> str:
+    started_at = time.monotonic()
+
+    if wren_client.is_configured():
+        context, examples = await asyncio.gather(
+            _build_models_context(question),
+            _recall_examples_text(question),
+        )
+    else:
+        context, examples = await _build_models_context(question), ""
+
+    if examples:
+        context = f"{context}\n\n### {examples}"
+
+    logger.info("Контекст для LLM собран за %.2fс", time.monotonic() - started_at)
+    return context
