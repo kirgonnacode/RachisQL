@@ -1,4 +1,4 @@
-# --- RachisQL Версия: 0.6.0 ---
+# --- RachisQL Версия: 0.7.0 ---
 
 
 
@@ -6,29 +6,42 @@ import time
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.responses import JSONResponse
-from . import wren_client, query_cache
+from . import wren_client, query_cache, wren_memory
 from .auth import require_auth
 from .chart_builder import build_chart_option
 from .chart_client import ChartRenderError, render_png
 from .config import MAX_ROWS, SQL_MAX_ATTEMPTS
 from .db import check_db_connection, close_pool, init_pool, run_readonly_query
-from .llm_client import generate_sql
+from .llm_client import generate_sql, warm_up_ollama
 from .logging_config import logger
 from .models import AskRequest, AskResponse, ErrorResponse, FeedbackRequest
 from .rate_limit import RateLimitExceeded, check_rate_limit
 from .schema_context import get_schema_context
 from .sql_guard import UnsafeSQLError, validate_and_sanitize
 from .value_resolver import resolve_dictionary_values
+import asyncio
 
+_background_tasks: set[asyncio.Task] = set()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_pool()
+
+    for coro in (warm_up_ollama(), wren_memory.warm_up()):
+        task = asyncio.create_task(coro)
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+
     yield
+
+    for task in list(_background_tasks):
+        task.cancel()
+    await asyncio.gather(*_background_tasks, return_exceptions=True)
+    wren_memory.shutdown()
     await close_pool()
 
 
-app = FastAPI(title="RachisQL", version="0.6.0", lifespan=lifespan)
+app = FastAPI(title="RachisQL", version="0.7.0", lifespan=lifespan)
 
 ERROR_RESPONSES = {
     401: {"model": ErrorResponse, "description": "Нет или невалиден Bearer-токен"},
@@ -61,6 +74,11 @@ async def health():
         "wren_configured": wren_client.is_configured(),
     }
     return JSONResponse(status_code=200 if db_ok else 503, content=payload)
+
+
+@app.get("/live")
+async def live():
+    return {"status": "alive"}
 
 
 async def _generate_and_execute_sql(question: str) -> tuple[str, list[dict]]:
@@ -213,8 +231,9 @@ async def feedback(request: FeedbackRequest, consumer: str = Depends(authenticat
 
     if request.rating == "up":
         try:
-            await wren_client.store_example(question, sql)
-            logger.info("Пример сохранён (👍 от '%s'): %s", consumer, question)
+            result = await wren_client.store_example(question, sql)
+            action = "обновлён" if result.get("updated") else "сохранён"
+            logger.info("Пример %s (👍 от '%s', %s): %s", action, consumer, result.get("file"), question)
         except wren_client.WrenExecutionError as e:
             logger.warning("Не удалось сохранить пример в Wren memory: %s", e)
     else:

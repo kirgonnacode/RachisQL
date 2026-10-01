@@ -5,6 +5,7 @@ import os
 from .config import WREN_CONNECTION_INFO, WREN_PROJECT_DIR, WREN_TIMEOUT_SECONDS, WREN_SEARCH_LIMIT, WREN_SEARCH_MAX_DISTANCE, RECALL_EXAMPLES_LIMIT
 from .logging_config import logger
 import time
+from . import wren_memory
 
 
 def _connection_flags() -> list[str]:
@@ -61,21 +62,11 @@ async def fetch_relevant_models(question: str) -> list[str]:
     if not _is_configured():
         raise WrenNotConfiguredError("target/mdl.json не найден, wren context build не выполнялся")
 
-    code, stdout, stderr = await _run_wren(
-        "memory", "fetch", "-q", question, "-l", str(WREN_SEARCH_LIMIT),
-        "--threshold", "1", "--output", "json",
-    )
-    
-    if code != 0:
-        logger.warning("wren memory fetch завершился с ошибкой: %s", stderr)
-        raise WrenExecutionError(stderr or "wren memory fetch failed")
-
     try:
-        data = json.loads(stdout)
-    except json.JSONDecodeError as e:
-        raise WrenExecutionError(f"Не удалось распарсить JSON от wren memory fetch: {e}")
+        results = await wren_memory.search_schema(question)
+    except wren_memory.WrenMemoryError as e:
+        raise WrenExecutionError(str(e))
 
-    results = data.get("results", [])
     if not isinstance(results, list):
         raise WrenExecutionError(
             f"wren memory fetch вернул неожиданный формат results: {type(results).__name__}"
@@ -112,20 +103,10 @@ async def recall_examples(question: str) -> list[dict]:
     if not _is_configured():
         raise WrenNotConfiguredError("target/mdl.json не найден")
 
-    code, stdout, stderr = await _run_wren(
-        "memory", "recall", "-q", question, "-l", str(RECALL_EXAMPLES_LIMIT), "--output", "json"
-    )
-    if code != 0:
-        raise WrenExecutionError(stderr or "wren memory recall failed")
-
-    stdout = stdout.strip()
-    if not stdout or stdout == "No results found.":
-        return []
-
     try:
-        data = json.loads(stdout)
-    except json.JSONDecodeError as e:
-        raise WrenExecutionError(f"Не удалось распарсить JSON от wren memory recall: {e}")
+        data = await wren_memory.recall(question)
+    except wren_memory.WrenMemoryError as e:
+        raise WrenExecutionError(str(e))
 
     if not isinstance(data, list):
         raise WrenExecutionError(f"wren memory recall вернул не список: {type(data).__name__}")
@@ -172,13 +153,14 @@ async def execute(sql: str, limit: int) -> list[dict]:
     return rows
 
 
-async def store_example(question: str, sql: str) -> None:
+async def store_example(question: str, sql: str) -> dict:
     if not _is_configured():
         raise WrenNotConfiguredError("target/mdl.json не найден")
 
-    code, stdout, stderr = await _run_wren("memory", "store", "--nl", question, "--sql", sql)
-    if code != 0:
-        raise WrenExecutionError(stderr or "wren memory store failed")   
+    try:
+        return await wren_memory.store_example(question, sql)
+    except wren_memory.WrenMemoryError as e:
+        raise WrenExecutionError(str(e))
 
 
 def is_configured() -> bool:

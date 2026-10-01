@@ -1,6 +1,8 @@
 import httpx
 from .config import OLLAMA_MAX_TOKENS, OLLAMA_MODEL, OLLAMA_TIMEOUT_SECONDS, OLLAMA_URL, OLLAMA_NUM_CTX
 from .logging_config import logger
+import asyncio
+import time
 
 SYSTEM_PROMPT = """Ты - генератор SQL-запросов для PostgreSQL.
 Тебе дана схема базы данных и вопрос пользователя на естественном языке.
@@ -116,3 +118,44 @@ async def generate_sql(
     logger.info("Ollama вернула сырой SQL: %s", raw_sql.replace("\n", " "))
 
     return raw_sql
+
+
+async def warm_up_ollama(attempts: int = 10, delay_seconds: float = 3.0) -> None:
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": "",
+        "stream": False,
+        "options": {"num_ctx": OLLAMA_NUM_CTX},
+    }
+
+    for attempt in range(1, attempts + 1):
+        started_at = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:
+                response = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
+                response.raise_for_status()
+            logger.info(
+                "Ollama прогрета: модель %s в VRAM (num_ctx=%d) за %.1fс",
+                OLLAMA_MODEL, OLLAMA_NUM_CTX, time.monotonic() - started_at,
+            )
+            return
+        except httpx.HTTPStatusError as e:
+            if 400 <= e.response.status_code < 500:
+                logger.error(
+                    "Прогрев Ollama: ответ %d для модели '%s': %s. "
+                    "Рекомендуется проверить OLLAMA_MODEL в .env и `docker compose exec ollama ollama list`",
+                    e.response.status_code, OLLAMA_MODEL, e.response.text[:200],
+                )
+                return
+            logger.info(
+                "Прогрев Ollama: попытка %d/%d, ответ %d, повтор через %.0fс",
+                attempt, attempts, e.response.status_code, delay_seconds,
+            )
+        except httpx.HTTPError as e:
+            logger.info(
+                "Прогрев Ollama: попытка %d/%d не удалась (%s: %s), повтор через %.0fс",
+                attempt, attempts, type(e).__name__, e, delay_seconds,
+            )
+        await asyncio.sleep(delay_seconds)
+
+    logger.warning("Не удалось прогреть Ollama за %d попыток, первый запрос будет холодным", attempts)

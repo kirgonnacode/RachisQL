@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN pip install --no-cache-dir "wrenai[postgres,memory]"
+RUN pip install --no-cache-dir "wrenai[postgres,memory]==0.15.0"
 
 COPY app ./app
 COPY wren ./wren
@@ -15,7 +15,7 @@ RUN mkdir -p /var/log/RachisQL
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else 1)"
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=3 \
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/live', timeout=3).status == 200 else 1)"
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
