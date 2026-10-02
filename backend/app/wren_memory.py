@@ -6,6 +6,7 @@ from pathlib import Path
 from .config import RECALL_EXAMPLES_LIMIT, WREN_PROJECT_DIR, WREN_SEARCH_LIMIT, WREN_TIMEOUT_SECONDS
 from .logging_config import logger
 from wren.memory.markdown import write_query_markdown
+import contextvars
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wren-memory")
 
@@ -62,9 +63,10 @@ async def _run(label: str, fn, *args):
     """Запускает синхронную функцию в потоке памяти Wren с таймаутом и замером."""
     loop = asyncio.get_running_loop()
     started_at = time.monotonic()
+    ctx = contextvars.copy_context()
     try:
         result = await asyncio.wait_for(
-            loop.run_in_executor(_executor, fn, *args),
+            loop.run_in_executor(_executor, ctx.run, fn, *args),
             timeout=WREN_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:

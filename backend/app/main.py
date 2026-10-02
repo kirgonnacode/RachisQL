@@ -1,4 +1,4 @@
-# --- RachisQL Версия: 0.7.5 ---
+# --- RachisQL Версия: 0.7.6 ---
 
 
 
@@ -20,6 +20,8 @@ from .schema_context import get_schema_context
 from .sql_guard import UnsafeSQLError, validate_and_sanitize
 from .value_resolver import resolve_dictionary_values
 import asyncio
+from .request_context import request_id
+from .tracing import trace_request
 
 _background_tasks: set[asyncio.Task] = set()
 
@@ -41,7 +43,9 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="RachisQL", version="0.7.5", lifespan=lifespan)
+app = FastAPI(title="RachisQL", version="0.7.6", lifespan=lifespan)
+
+app.middleware("http")(trace_request)
 
 ERROR_RESPONSES = {
     401: {"model": ErrorResponse, "description": "Нет или невалиден Bearer-токен"},
@@ -53,7 +57,14 @@ ERROR_RESPONSES = {
 
 
 def _error(detail: str, generated_sql: str | None = None) -> dict:
-    return ErrorResponse(detail=detail, generated_sql=generated_sql).model_dump()
+    # ID вопроса автоматически попадает в тело любой ошибки.
+    # Вне трассируемых эндпоинтов (например 401 на /feedback) будет "-" -> None
+    current_id = request_id.get()
+    return ErrorResponse(
+        detail=detail,
+        generated_sql=generated_sql,
+        query_id=current_id if current_id != "-" else None,
+    ).model_dump()
 
 
 async def authenticated_consumer(consumer: str = Depends(require_auth)) -> str:
@@ -170,19 +181,17 @@ async def _execute_sql(sql: str) -> list[dict]:
 
 @app.post("/ask", response_model=AskResponse, responses=ERROR_RESPONSES)
 async def ask(request: AskRequest, consumer: str = Depends(authenticated_consumer)):
-    started_at = time.monotonic()
     logger.info("Новый вопрос от '%s': %s", consumer, request.question)
 
     safe_sql, rows = await _generate_and_execute_sql(request.question)
-
-    elapsed = time.monotonic() - started_at
-    logger.info("Вопрос обработан за %.2fс, строк: %d", elapsed, len(rows))
+    logger.info("Вопрос обработан, строк: %d", len(rows))
 
     return AskResponse(
         question=request.question,
         generated_sql=safe_sql,
         rows=rows,
         row_count=len(rows),
+        query_id=request_id.get(),
     )
 
 
@@ -213,13 +222,15 @@ async def ask_image(request: AskRequest, consumer: str = Depends(authenticated_c
         png_bytes = await render_png(option)
     except ChartRenderError as e:
         raise HTTPException(502, detail=_error(f"Сервис рендера графиков недоступен: {e}", generated_sql=safe_sql))
-    
-    query_id = query_cache.store(request.question, safe_sql)
-    return Response(content=png_bytes, media_type="image/png", headers={"X-Query-Id": query_id})
+
+    query_cache.store(request_id.get(), request.question, safe_sql)
+    return Response(content=png_bytes, media_type="image/png")
 
 
 @app.post("/feedback", responses=ERROR_RESPONSES)
 async def feedback(request: FeedbackRequest, consumer: str = Depends(authenticated_consumer)):
+    request_id.set(request.query_id)
+
     cached = query_cache.get(request.query_id)
     if cached is None:
         raise HTTPException(

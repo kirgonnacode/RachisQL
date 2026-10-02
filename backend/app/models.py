@@ -17,11 +17,13 @@ class AskResponse(BaseModel):
     generated_sql: str
     rows: list[dict[str, Any]]
     row_count: int
+    query_id: str
 
 
 class ErrorResponse(BaseModel):
     detail: str
     generated_sql: str | None = None
+    query_id: str | None = None
     
 
 class FeedbackRequest(BaseModel):
