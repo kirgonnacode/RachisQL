@@ -1,7 +1,7 @@
 const express = require("express");
 const { createCanvas } = require("canvas");
 const echarts = require("echarts");
-
+const { applyFormatters } = require("./formatters");
 
 echarts.setPlatformAPI({
   createCanvas() {
@@ -32,7 +32,7 @@ app.post("/render", (req, res) => {
   try {
     canvas = createCanvas(w, h);
     chart = echarts.init(canvas);
-    chart.setOption(option);
+    chart.setOption(applyFormatters(option));
 
     const buffer = canvas.toBuffer("image/png");
     res.set("Content-Type", "image/png");
