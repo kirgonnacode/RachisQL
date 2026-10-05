@@ -5,8 +5,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from .config import RECALL_EXAMPLES_LIMIT, WREN_PROJECT_DIR, WREN_SEARCH_LIMIT, WREN_TIMEOUT_SECONDS
 from .logging_config import logger
-from wren.memory.markdown import write_query_markdown
+from wren.memory.markdown import write_query_markdown, load_query_pairs
 import contextvars
+from wren.memory.store import _QUERY_TABLE, _table_names
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wren-memory")
 
@@ -118,6 +119,72 @@ def _store_example_sync(question: str, sql: str) -> dict:
 
 async def store_example(question: str, sql: str) -> dict:
     return await _run("store", _store_example_sync, question, sql)
+
+
+def _normalize_sql(sql: str) -> str:
+    return " ".join(sql.split()).rstrip("; ")
+
+
+def _lance_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _forget_example_sync(question: str, sql: str) -> dict:
+
+    nl = question.strip()
+    target_sql = _normalize_sql(sql)
+    project = Path(WREN_PROJECT_DIR)
+
+    found_any = False
+
+    # 1) markdown. Файлы называются по латинице/цифрам вопроса (2026.md, 3.md),
+    #    поэтому ищем по содержимому (поле nl), а не по имени файла
+    removed_files: list[str] = []
+    for pair in load_query_pairs(project):
+        if str(pair["nl"]).strip() != nl:
+            continue
+        found_any = True
+        if _normalize_sql(str(pair["sql"])) == target_sql:
+            (project / pair["path"]).unlink(missing_ok=True)
+            removed_files.append(Path(pair["path"]).name)
+
+    # 2) индекс LanceDB. Читаем таблицу так же, как сам wrenai (to_pandas -
+    #    стабильно между версиями lancedb), SQL сравниваем в Python (нормализацию
+    #    в where-условии не выразить), затем удаляем точечно по сырым значениям
+    #    через table.delete: он атомарный, в отличие от forget_queries_by_ids
+    #    из wrenai, который перезаписывает таблицу целиком
+    removed_rows = 0
+    db = _get_store()._db
+    if _QUERY_TABLE in _table_names(db):
+        table = db.open_table(_QUERY_TABLE)
+        df = table.to_pandas()
+        same_question = df[df["nl_query"].str.strip() == nl]
+        if not same_question.empty:
+            found_any = True
+        pairs_to_delete = {
+            (row.nl_query, row.sql_query)
+            for row in same_question.itertuples()
+            if _normalize_sql(row.sql_query) == target_sql
+        }
+        for raw_nl, raw_sql in pairs_to_delete:
+            predicate = f"nl_query = {_lance_literal(raw_nl)} AND sql_query = {_lance_literal(raw_sql)}"
+            before = table.count_rows()
+            table.delete(predicate)
+            removed_rows += before - table.count_rows()
+
+    if removed_files or removed_rows:
+        action = "removed"
+    elif found_any:
+        action = "sql_mismatch"
+    else:
+        action = "not_found"
+
+    return {"action": action, "files": removed_files, "rows": removed_rows}
+
+
+async def forget_example(question: str, sql: str) -> dict:
+    """Удаляет пример по 👎. Возвращает {'action': removed|sql_mismatch|not_found, 'files', 'rows'}."""
+    return await _run("forget", _forget_example_sync, question, sql)
 
 
 def shutdown() -> None:

@@ -162,6 +162,15 @@ async def store_example(question: str, sql: str) -> dict:
     except wren_memory.WrenMemoryError as e:
         raise WrenExecutionError(str(e))
 
+    
+async def forget_example(question: str, sql: str) -> dict:
+    if not _is_configured():
+        raise WrenNotConfiguredError("target/mdl.json не найден")
+
+    try:
+        return await wren_memory.forget_example(question, sql)
+    except wren_memory.WrenMemoryError as e:
+        raise WrenExecutionError(str(e))
 
 def is_configured() -> bool:
     return _is_configured()

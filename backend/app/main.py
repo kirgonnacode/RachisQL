@@ -1,4 +1,4 @@
-# --- RachisQL Версия: 0.7.6 ---
+# --- RachisQL Версия: 0.7.7 ---
 
 
 
@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="RachisQL", version="0.7.6", lifespan=lifespan)
+app = FastAPI(title="RachisQL", version="0.7.7", lifespan=lifespan)
 
 app.middleware("http")(trace_request)
 
@@ -240,14 +240,30 @@ async def feedback(request: FeedbackRequest, consumer: str = Depends(authenticat
 
     question, sql = cached["question"], cached["sql"]
 
+    memory_errors = (wren_client.WrenExecutionError, wren_client.WrenNotConfiguredError)
+
     if request.rating == "up":
         try:
             result = await wren_client.store_example(question, sql)
             action = "обновлён" if result.get("updated") else "сохранён"
             logger.info("Пример %s (👍 от '%s', %s): %s", action, consumer, result.get("file"), question)
-        except wren_client.WrenExecutionError as e:
+        except memory_errors as e:
             logger.warning("Не удалось сохранить пример в Wren memory: %s", e)
     else:
         logger.warning("Плохая оценка (👎 от '%s') | вопрос: %s | SQL: %s", consumer, question, sql)
+        try:
+            result = await wren_client.forget_example(question, sql)
+            if result["action"] == "removed":
+                logger.info(
+                    "Пример удалён по 👎 от '%s' (файлы: %s, строк индекса: %d): %s",
+                    consumer, result["files"], result["rows"], question,
+                )
+            elif result["action"] == "sql_mismatch":
+                logger.info(
+                    "👎 на SQL, отличный от сохранённого: подтверждённый пример по вопросу оставлен: %s",
+                    question,
+                )
+        except memory_errors as e:
+            logger.warning("Не удалось удалить пример из Wren memory: %s", e)
 
     return {"status": "ok"}
