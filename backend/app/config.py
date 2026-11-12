@@ -32,8 +32,10 @@ CHART_RENDERER_URL = os.getenv("CHART_RENDERER_URL", "http://chart_renderer:3000
 WREN_PROJECT_DIR = os.getenv("WREN_PROJECT_DIR", "/app/wren")
 WREN_TIMEOUT_SECONDS = os.getenv("WREN_TIMEOUT_SECONDS", "20")
 WREN_CONNECTION_INFO = os.getenv("WREN_CONNECTION_INFO")    # не обязателен, см. wren_client.py
-WREN_SEARCH_LIMIT = os.getenv("WREN_SEARCH_LIMIT", "15")
+WREN_SEARCH_LIMIT = os.getenv("WREN_SEARCH_LIMIT", "200")
 WREN_SEARCH_MAX_DISTANCE = os.getenv("WREN_SEARCH_MAX_DISTANCE", "")
+WREN_SEARCH_MAX_MODELS = os.getenv("WREN_SEARCH_MAX_MODELS", "4")       # сколько лучших таблиц отдаём в LLM (защита контекста от переполнения)
+WREN_LEXICAL_WEIGHT = os.getenv("WREN_LEXICAL_WEIGHT", "3")             # вес поиска по словам в гибриде
 
 # --- Аутентификация ---
 TOKENS_FILE = os.getenv("TOKENS_FILE", "/app/tokens.txt")
@@ -85,6 +87,7 @@ def _validate() -> None:
         "RATE_LIMIT_PER_MINUTE": RATE_LIMIT_PER_MINUTE,
         "DICTIONARY_MATCH_THRESHOLD": DICTIONARY_MATCH_THRESHOLD,
         "WREN_SEARCH_LIMIT": WREN_SEARCH_LIMIT,
+        "WREN_SEARCH_MAX_MODELS": WREN_SEARCH_MAX_MODELS,
         "SQL_MAX_ATTEMPTS": SQL_MAX_ATTEMPTS,
         "SAMPLE_ROWS_COUNT": SAMPLE_ROWS_COUNT,
         "QUERY_CACHE_MAX_SIZE": QUERY_CACHE_MAX_SIZE,
@@ -105,6 +108,11 @@ def _validate() -> None:
                 f"WREN_SEARCH_MAX_DISTANCE должен быть числом или пустым, получили: '{WREN_SEARCH_MAX_DISTANCE}'"
             )            
 
+    try:
+        if float(WREN_LEXICAL_WEIGHT) <= 0:
+            errors.append(f"WREN_LEXICAL_WEIGHT должен быть больше 0, получили: '{WREN_LEXICAL_WEIGHT}'")
+    except ValueError:
+        errors.append(f"WREN_LEXICAL_WEIGHT должен быть числом, получили: '{WREN_LEXICAL_WEIGHT}'")
     if RECALL_MAX_DISTANCE.strip():
         try:
             float(RECALL_MAX_DISTANCE)
@@ -150,6 +158,8 @@ RATE_LIMIT_PER_MINUTE = int(RATE_LIMIT_PER_MINUTE)
 CHART_TIMEZONE_OFFSET_HOURS = int(CHART_TIMEZONE_OFFSET_HOURS)
 DICTIONARY_MATCH_THRESHOLD = int(DICTIONARY_MATCH_THRESHOLD)
 WREN_SEARCH_LIMIT = int(WREN_SEARCH_LIMIT)
+WREN_SEARCH_MAX_MODELS = int(WREN_SEARCH_MAX_MODELS)
+WREN_LEXICAL_WEIGHT = float(WREN_LEXICAL_WEIGHT)
 SQL_MAX_ATTEMPTS = int(SQL_MAX_ATTEMPTS)
 SAMPLE_ROWS_COUNT = int(SAMPLE_ROWS_COUNT)
 WREN_SEARCH_MAX_DISTANCE = float(WREN_SEARCH_MAX_DISTANCE) if WREN_SEARCH_MAX_DISTANCE.strip() else None

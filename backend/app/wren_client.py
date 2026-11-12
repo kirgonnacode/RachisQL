@@ -1,12 +1,15 @@
 
 import asyncio
+import collections
 import json
 import os
-from .config import WREN_CONNECTION_INFO, WREN_PROJECT_DIR, WREN_TIMEOUT_SECONDS, WREN_SEARCH_LIMIT, WREN_SEARCH_MAX_DISTANCE, RECALL_EXAMPLES_LIMIT
+from .config import WREN_CONNECTION_INFO, WREN_PROJECT_DIR, WREN_TIMEOUT_SECONDS, WREN_SEARCH_LIMIT, WREN_SEARCH_MAX_DISTANCE, RECALL_EXAMPLES_LIMIT, WREN_SEARCH_MAX_MODELS, WREN_LEXICAL_WEIGHT
 from .logging_config import logger
 import time
 from . import wren_memory
+from . import lexical_index
 
+_RRF_K = 10   # сглаживание рангов в гибридном поиске: разница между 1-м и 2-м местом важнее, чем между 30-м и 31-м
 
 def _connection_flags() -> list[str]:
     if not WREN_CONNECTION_INFO:
@@ -72,30 +75,46 @@ async def fetch_relevant_models(question: str) -> list[str]:
             f"wren memory fetch вернул неожиданный формат results: {type(results).__name__}"
         )
 
-    seen: set[str] = set()
-    model_names: list[str] = []
-    display_names: list[str] = []
+    emb_ranked: list[str] = []
+    emb_distance: dict[str, float | None] = {}
     filtered_out: list[str] = []
     for item in results:
         name = item.get("model_name")
-        if not name or name in seen:
+        if not name or name in emb_distance:
             continue
         distance = item.get("_distance")
-
         if WREN_SEARCH_MAX_DISTANCE is not None and distance is not None and distance > WREN_SEARCH_MAX_DISTANCE:
             filtered_out.append(f"{name} ({distance:.3f})")
+            emb_distance[name] = distance
             continue
+        emb_distance[name] = distance
+        emb_ranked.append(name)
 
-        seen.add(name)
-        model_names.append(name)
-        display_names.append(f"{name} ({distance:.3f})" if distance is not None else name)
+    try:
+        lex_ranked = [name for name, _ in lexical_index.rank(question)]
+    except Exception as e:
+        logger.warning("Лексический поиск недоступен (%s), используется только поиск по смыслу", e)
+        lex_ranked = []
+
+    emb_pos = {name: i + 1 for i, name in enumerate(emb_ranked)}
+    lex_pos = {name: i + 1 for i, name in enumerate(lex_ranked)}
+    scores: dict[str, float] = collections.defaultdict(float)
+    for name, pos in emb_pos.items():
+        scores[name] += 1.0 / (_RRF_K + pos)
+    for name, pos in lex_pos.items():
+        scores[name] += WREN_LEXICAL_WEIGHT / (_RRF_K + pos)
+    model_names = sorted(scores, key=lambda n: (-scores[n], emb_pos.get(n, 10**6)))[:WREN_SEARCH_MAX_MODELS]
+
+    def _label(name: str) -> str:
+        distance = emb_distance.get(name)
+        by_meaning = f"#{emb_pos[name]} {distance:.3f}" if name in emb_pos and distance is not None else "—"
+        return f"{name} (смысл {by_meaning}, слова #{lex_pos.get(name, '—')})"
 
     logger.info(
-        "wren search нашёл: %s%s",
-        display_names,
+        "Поиск таблиц (гибрид): %s%s",
+        [_label(n) for n in model_names],
         f" | отфильтровано по дистанции: {filtered_out}" if filtered_out else "",
     )
-
     return model_names
 
 
