@@ -6,6 +6,10 @@ import yaml
 from .config import WREN_PROJECT_DIR, SAMPLE_ROWS_ENABLED, SAMPLE_ROWS_COUNT, RECALL_MAX_DISTANCE
 import asyncio
 import time
+from sqlglot import exp, parse
+from sqlglot.errors import SqlglotError
+from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
+from sqlglot.optimizer.scope import traverse_scope
 
 async def _introspect_postgres() -> str:
     rows = await run_internal_query(
@@ -102,74 +106,118 @@ async def _fetch_sample_rows(model_name: str) -> str:
     return "\n".join(lines)
 
 
-async def _build_models_context(question: str) -> str:
+def _example_models(sql: str) -> set[str]:
+    try:
+        statements = parse(sql, read="postgres")
+        if len(statements) != 1 or not isinstance(statements[0], exp.Query):
+            return set()
+
+        query = normalize_identifiers(statements[0], dialect="postgres")
+        names: set[str] = set()
+
+        for scope in traverse_scope(query):
+            for _, source in scope.selected_sources.values():
+                if isinstance(source, exp.Table):
+                    if (
+                        not isinstance(source.this, exp.Identifier)
+                        or source.db not in ("", "public")
+                        or source.catalog not in ("", "wren")
+                    ):
+                        return set()
+                    names.add(source.name)
+
+        return names
+    except SqlglotError:
+        return set()
+
+
+async def _build_models_context(question: str) -> tuple[str, set[str]]:
     if not wren_client.is_configured():
         logger.info("Wren не настроен или недоступен, fallback на Postgres напрямую")
-        return await _introspect_postgres()
+        return await _introspect_postgres(), set()
 
     try:
         model_names = await wren_client.fetch_relevant_models(question)
-    except wren_client.WrenExecutionError as e:
+    except (wren_client.WrenExecutionError, wren_client.WrenNotConfiguredError) as e:
         logger.warning("wren memory fetch не сработал (%s), fallback на Postgres напрямую", e)
-        return await _introspect_postgres()
+        return await _introspect_postgres(), set()
 
     if not model_names:
         logger.warning("wren search не нашёл релевантных таблиц, fallback на Postgres напрямую")
-        return await _introspect_postgres()
+        return await _introspect_postgres(), set()
 
     descriptions = [_describe_model(name) for name in model_names]
     sample_blocks = await asyncio.gather(*(_fetch_sample_rows(name) for name in model_names))
 
     blocks = []
-    for desc, samples in zip(descriptions, sample_blocks):
+    included_models: set[str] = set()
+
+    for name, desc, samples in zip(model_names, descriptions, sample_blocks):
         if desc:
             blocks.append(desc)
+            included_models.add(name)
         if samples:
             blocks.append(samples)
 
-    sample_count = sum(1 for s in sample_blocks if s)
+    sample_count = sum(1 for samples in sample_blocks if samples)
     logger.info(
         "Схема собрана через wren search: %s (sample rows получены: %d/%d)",
-        model_names, sample_count, len(model_names),
+        [name for name in model_names if name in included_models], sample_count, len(model_names),
     )
-    return "\n\n".join(blocks)
+    return "\n\n".join(blocks), included_models
 
 
-async def _recall_examples_text(question: str) -> str:
+async def _recall_candidates(question: str) -> list[dict]:
     try:
-        examples = await wren_client.recall_examples(question)
-    except wren_client.WrenExecutionError as e:
+        return await wren_client.recall_examples(question)
+    except (wren_client.WrenExecutionError, wren_client.WrenNotConfiguredError) as e:
         logger.warning("wren memory recall не сработал (%s), пропускаю", e)
-        return ""
+        return []
 
-    if not examples:
-        return ""
 
+def _format_recall_examples(examples: list[dict], included_models: set[str]) -> str:
+    if not examples or not included_models:
+        return ""
 
     kept_labels: list[str] = []
     kept_texts: list[str] = []
     filtered_out: list[str] = []
+
     for ex in examples:
         nl = ex.get("nl_query", "")
         sql = ex.get("sql_query", "")
         if not nl or not sql:
             continue
 
-        distance = ex.get("_distance")
-        if RECALL_MAX_DISTANCE is not None and distance is not None and distance > RECALL_MAX_DISTANCE:
-            filtered_out.append(f"{nl!r} ({distance:.3f})")
+        tags = (ex.get("tags") or "").split()
+        if "source:user" not in tags:
+            filtered_out.append(f"{nl!r} (теги: {' '.join(tags) or 'без тегов'})")
             continue
 
-        kept_labels.append(f"{nl!r} ({distance:.3f})" if distance is not None else f"{nl!r} (score={ex.get('score')})")
+        distance = ex.get("_distance")
+        if RECALL_MAX_DISTANCE is not None and distance is not None and distance > RECALL_MAX_DISTANCE:
+            filtered_out.append(f"{nl!r} (distance={distance:.3f})")
+            continue
+
+        models = _example_models(sql)
+        if not models:
+            filtered_out.append(f"{nl!r} (таблицы не определены)")
+            continue
+
+        outside = models - included_models
+        if outside:
+            filtered_out.append(f"{nl!r} (вне контекста: {', '.join(sorted(outside))})")
+            continue
+
+        label = f"{distance:.3f}" if distance is not None else f"score={ex.get('score')}"
+        kept_labels.append(f"{nl!r} ({label})")
         kept_texts.append(f'Вопрос: "{nl}"\nSQL: {sql}')
 
     logger.info(
-        "wren recall нашёл примеров: %d %s%s",
-        len(kept_texts),
-        kept_labels,
-        f" | отфильтровано по дистанции: {filtered_out}" if filtered_out else "",
+        "wren recall нашёл примеров: %d %s | отфильтровано: %s",
+        len(kept_texts), kept_labels, filtered_out,
     )
-
+    
     if not kept_texts:
         return ""
 
@@ -182,12 +230,14 @@ async def get_schema_context(question: str) -> str:
     started_at = time.monotonic()
 
     if wren_client.is_configured():
-        context, examples = await asyncio.gather(
+        (context, included_models), candidates = await asyncio.gather(
             _build_models_context(question),
-            _recall_examples_text(question),
+            _recall_candidates(question),
         )
+        examples = _format_recall_examples(candidates, included_models)
     else:
-        context, examples = await _build_models_context(question), ""
+        context, _ = await _build_models_context(question)
+        examples = ""
 
     if examples:
         context = f"{context}\n\n### {examples}"
