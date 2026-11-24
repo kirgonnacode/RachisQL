@@ -51,25 +51,19 @@ SYSTEM_PROMPT = """Ты - генератор SQL-запросов для Postgre
 async def generate_sql(
     question: str,
     schema_context: str,
-    previous_sql: str | None = None,
-    previous_error: str | None = None,
+    history: list[tuple[str, str]] | None = None,
+    column_hint: str = "",
 ) -> str:
-    if previous_sql and previous_error:
-        prompt = (
-            f"Схема базы данных:\n{schema_context}\n\n"
-            f"Вопрос пользователя: {question}\n\n"
-            f"Твоя предыдущая попытка была отклонена:\n{previous_sql}\n\n"
-            f"Причина отказа: {previous_error}\n\n"
-            f"Исправь запрос с учётом этой ошибки. Не повторяй ту же ошибку.\n\n"
-            f"SQL-запрос:"
-        )
-    else:
-        prompt = (
-            f"Схема базы данных:\n{schema_context}\n\n"
-            f"Вопрос пользователя: {question}\n\n"
-            f"SQL-запрос:"
-        )
-
+    parts = [f"Схема базы данных:\n{schema_context}", f"Вопрос пользователя: {question}"]
+    if history:
+        for number, (sql, reason) in enumerate(history, 1):
+            parts.append(f"Попытка {number}:\n{sql}\nРезультат: {reason}")
+        if column_hint:
+            parts.append(column_hint)
+        parts.append("Учти результаты всех попыток при выборе следующего SQL.")
+    parts.append("SQL-запрос:")
+    prompt = "\n\n".join(parts)
+    
     payload = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,

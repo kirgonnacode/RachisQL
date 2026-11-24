@@ -1,4 +1,4 @@
-# --- RachisQL Версия: 0.8.0 ---
+# --- RachisQL Версия: 0.8.1 ---
 
 
 
@@ -16,12 +16,13 @@ from .llm_client import generate_sql, warm_up_ollama
 from .logging_config import logger
 from .models import AskRequest, AskResponse, ErrorResponse, FeedbackRequest
 from .rate_limit import RateLimitExceeded, check_rate_limit
-from .schema_context import get_schema_context
-from .sql_guard import UnsafeSQLError, validate_and_sanitize
+from .schema_context import get_schema_context_with_columns
+from .sql_guard import UnsafeSQLError, sql_retry_key, validate_and_sanitize
 from .value_resolver import resolve_dictionary_values
 import asyncio
 from .request_context import request_id
 from .tracing import trace_request
+import re
 
 _background_tasks: set[asyncio.Task] = set()
 
@@ -43,7 +44,7 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="RachisQL", version="0.8.0", lifespan=lifespan)
+app = FastAPI(title="RachisQL", version="0.8.1", lifespan=lifespan)
 
 app.middleware("http")(trace_request)
 
@@ -54,6 +55,14 @@ ERROR_RESPONSES = {
     500: {"model": ErrorResponse, "description": "Ошибка выполнения запроса"},
     503: {"model": ErrorResponse, "description": "Ollama или Postgres временно недоступны"},
 }
+
+
+_UNKNOWN_COLUMN = re.compile(
+    r'\bcolumn\b[^\n]*?\b(?:does not exist|not found)\b'
+    r'|\b(?:unknown column|no field named|no such column)\b'
+    r'|\b(?:столбец|колонка)\b[^\n]*?\bне существует\b',
+    re.IGNORECASE,
+)
 
 
 def _error(detail: str, generated_sql: str | None = None) -> dict:
@@ -92,81 +101,101 @@ async def live():
     return {"status": "alive"}
 
 
+def _column_hint(columns_by_model: dict[str, list[str]]) -> str:
+    lines = []
+    for table, columns in columns_by_model.items():
+        if columns:
+            quoted = ['"' + name.replace('"', '""') + '"' for name in columns]
+            lines.append(f"{table}: {', '.join(quoted)}")
+    if not lines:
+        return ""
+    return "Точные имена колонок выбранных таблиц:\n" + "\n".join(lines)
+
+
+def _finish_attempt(sql: str, error_detail: str | None) -> tuple[str, list[dict]]:
+    if error_detail is not None:
+        raise HTTPException(422, detail=_error(error_detail, generated_sql=sql))
+    return sql, []
+
+
 async def _generate_and_execute_sql(question: str) -> tuple[str, list[dict]]:
     try:
-        schema_context = await get_schema_context(question)
+        schema_context, columns = await get_schema_context_with_columns(question)
     except Exception as e:
         logger.error("Не удалось получить схему: %s", e)
         raise HTTPException(503, detail=_error(f"База данных временно недоступна: {e}"))
 
-    previous_sql: str | None = None
-    previous_error: str | None = None
-    last_raw_sql = ""
-    last_error_detail = ""
-    last_safe_sql = ""
+    history: list[tuple[str, str]] = []
+    outcomes: dict[tuple[bool, tuple[str, ...]], tuple[str, str | None]] = {}
+    hint = ""
+    outcome: tuple[str, str | None] = ("", "Попытки генерации SQL исчерпаны")
 
     for attempt in range(1, SQL_MAX_ATTEMPTS + 1):
         try:
-            raw_sql = await generate_sql(question, schema_context, previous_sql, previous_error)
+            raw_sql = await generate_sql(question, schema_context, history, hint)
         except Exception as e:
             logger.error("Не удалось сгенерировать SQL (попытка %d): %s", attempt, e)
             raise HTTPException(503, detail=_error(f"LLM временно недоступна: {e}"))
 
-        last_raw_sql = raw_sql
-
+        error: Exception | None = None
         try:
-            safe_sql = validate_and_sanitize(raw_sql)
+            sql = validate_and_sanitize(raw_sql)
         except UnsafeSQLError as e:
-            logger.warning("Попытка %d: guard отклонил SQL: %s | причина: %s", attempt, raw_sql, e)
-            previous_sql, previous_error = raw_sql, str(e)
-            last_error_detail = f"Сгенерированный SQL отклонён guard'ом: {e}"
-            last_safe_sql = ""
-            continue
+            sql = raw_sql
+            error = e
+        else:
+            sql = resolve_dictionary_values(sql)
 
-        safe_sql = resolve_dictionary_values(safe_sql)
+        passed_guard = error is None
+        key = (passed_guard, sql_retry_key(sql))
+        if key in outcomes:
+            logger.info("Попытка %d: SQL повторился, завершаю цикл", attempt)
+            return _finish_attempt(*outcomes[key])
 
-        if wren_client.is_configured():
+        if error is not None:
+            logger.warning("Попытка %d: guard отклонил SQL: %s | причина: %s", attempt, sql, error)
+            detail = f"Сгенерированный SQL отклонён guard'ом: {error}"
+        elif wren_client.is_configured():
             try:
-                await wren_client.dry_run(safe_sql)
+                await wren_client.dry_run(sql)
             except wren_client.WrenValidationError as e:
-                logger.warning("Попытка %d: Wren dry-run отклонил SQL: %s | причина: %s", attempt, safe_sql, e)
-                previous_sql, previous_error = safe_sql, str(e)
-                last_error_detail = f"Запрос не соответствует модели данных (Wren): {e}"
-                last_safe_sql = ""
-                continue
+                error = e
+                detail = f"Запрос не соответствует модели данных (Wren): {e}"
+                logger.warning("Попытка %d: Wren dry-run отклонил SQL: %s | причина: %s", attempt, sql, e)
             except wren_client.WrenExecutionError as e:
                 logger.warning("Wren dry-run недоступен (%s), продолжаю без семантической валидации", e)
 
-        try:
-            rows = await _execute_sql(safe_sql)
-        except Exception as e:
-            logger.warning("Попытка %d: ошибка выполнения SQL '%s': %s", attempt, safe_sql, e)
-            previous_sql, previous_error = safe_sql, str(e)
-            last_error_detail = f"Ошибка выполнения запроса: {e}"
-            last_safe_sql = ""
-            continue
+        if error is None:
+            try:
+                rows = await _execute_sql(sql)
+            except Exception as e:
+                error = e
+                detail = f"Ошибка выполнения запроса: {e}"
+                logger.warning("Попытка %d: ошибка выполнения SQL '%s': %s", attempt, sql, e)
+            else:
+                if rows:
+                    if attempt > 1:
+                        logger.info("SQL успешно исправлен с попытки %d/%d", attempt, SQL_MAX_ATTEMPTS)
+                    return sql, rows
 
-        if rows:
-            if attempt > 1:
-                logger.info("SQL успешно исправлен с попытки %d/%d", attempt, SQL_MAX_ATTEMPTS)
-            return safe_sql, rows
+        if error is None:
+            logger.warning("Попытка %d: запрос выполнился, но вернул 0 строк", attempt)
+            reason = (
+                "Запрос выполнился успешно, но вернул 0 строк. Проверь значения WHERE, "
+                "даты, таблицы и колонки. Если данных действительно нет, оставь запрос как есть."
+            )
+            outcome = (sql, None)
+        else:
+            reason = str(error)
+            outcome = (raw_sql, detail)
+            if passed_guard and not hint:
+                if getattr(error, "sqlstate", None) == "42703" or _UNKNOWN_COLUMN.search(reason):
+                    hint = _column_hint(columns)
 
-        logger.warning("Попытка %d: запрос выполнился, но вернул 0 строк", attempt)
-        last_safe_sql = safe_sql
-        last_error_detail = "Запрос выполнился, но не вернул данных"
-        previous_sql = safe_sql
-        previous_error = (
-            "Запрос выполнился успешно, но вернул 0 строк. Проверь точное "
-            "написание значений в WHERE (регистр, формат даты, опечатки) и "
-            "правильную ли таблицу/колонку используешь. Если данные "
-            "действительно могут отсутствовать за этот период - оставь запрос как есть."
-        )
+        history.append((sql, reason))
+        outcomes[key] = outcome
 
-    if last_safe_sql:
-        logger.info("После %d попыток запрос стабильно возвращает 0 строк - отдаю как валидный пустой результат", SQL_MAX_ATTEMPTS)
-        return last_safe_sql, []
-
-    raise HTTPException(422, detail=_error(last_error_detail, generated_sql=last_raw_sql))
+    return _finish_attempt(*outcome)
 
 
 async def _execute_sql(sql: str) -> list[dict]:

@@ -4,6 +4,8 @@ import sqlparse
 from sqlparse.sql import Statement
 from sqlparse.tokens import Keyword
 from .config import MAX_ROWS
+from pglast import scan
+from pglast.parser import ParseError
 
 FORBIDDEN_KEYWORDS = {
     "insert", "update", "delete", "drop", "alter", "truncate",
@@ -15,6 +17,27 @@ _CODE_FENCE_RE = re.compile(r"```(?:sql)?\s*\n?(.*?)```", re.IGNORECASE | re.DOT
 
 class UnsafeSQLError(Exception):
     pass
+
+
+def sql_retry_key(sql: str) -> tuple[str, ...]:
+    if "\x00" in sql:
+        return ("raw", sql)
+
+    try:
+        tokens = scan(sql)
+    except (ParseError, UnicodeError):
+        return ("raw", sql)
+
+    parts = []
+    for token in tokens:
+        value = sql[token.start:token.end + 1]
+        if token.name in {"SQL_COMMENT", "C_COMMENT"} and not value.startswith("/*+"):
+            continue
+        parts.append(value.upper() if token.kind != "NO_KEYWORD" else value)
+
+    if parts and parts[-1] == ";":
+        parts.pop()
+    return ("tokens", *parts)
 
 
 def _strip_markdown_fences(raw_sql: str) -> str:

@@ -31,21 +31,24 @@ async def _introspect_postgres() -> str:
     return "\n".join(lines)
 
 
-def _describe_model(model_name: str) -> str:
+def _describe_model(model_name: str) -> tuple[str, list[str]]:
     metadata_file = Path(WREN_PROJECT_DIR) / "models" / model_name / "metadata.yml"
     if not metadata_file.is_file():
-        return ""
+        return "", []
     try:
         data = yaml.safe_load(metadata_file.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as e:
         logger.warning("Не удалось прочитать %s: %s", metadata_file, e)
-        return ""
+        return "", []
 
     table_desc = (data.get("properties") or {}).get("description", "")
     header = f"Таблица '{model_name}'" + (f" — {table_desc}" if table_desc else "") + ":"
     lines = [header]
+    column_names: list[str] = []
     for col in data.get("columns", []) or []:
         col_name = col.get("name", "?")
+        if col.get("name"):
+            column_names.append(col_name)
         col_type = col.get("type", "")
         col_desc = (col.get("properties") or {}).get("description", "")
         pk_marker = " [PRIMARY KEY]" if col.get("is_primary_key") else ""
@@ -54,7 +57,7 @@ def _describe_model(model_name: str) -> str:
             line += f": {col_desc}"
         lines.append(line)
 
-    return "\n".join(lines)
+    return "\n".join(lines), column_names
 
 
 def _quote_ident(ident: str) -> str:
@@ -131,40 +134,40 @@ def _example_models(sql: str) -> set[str]:
         return set()
 
 
-async def _build_models_context(question: str) -> tuple[str, set[str]]:
+async def _build_models_context(question: str) -> tuple[str, dict[str, list[str]]]:
     if not wren_client.is_configured():
         logger.info("Wren не настроен или недоступен, fallback на Postgres напрямую")
-        return await _introspect_postgres(), set()
+        return await _introspect_postgres(), {}
 
     try:
         model_names = await wren_client.fetch_relevant_models(question)
     except (wren_client.WrenExecutionError, wren_client.WrenNotConfiguredError) as e:
         logger.warning("wren memory fetch не сработал (%s), fallback на Postgres напрямую", e)
-        return await _introspect_postgres(), set()
+        return await _introspect_postgres(), {}
 
     if not model_names:
         logger.warning("wren search не нашёл релевантных таблиц, fallback на Postgres напрямую")
-        return await _introspect_postgres(), set()
+        return await _introspect_postgres(), {}
 
     descriptions = [_describe_model(name) for name in model_names]
     sample_blocks = await asyncio.gather(*(_fetch_sample_rows(name) for name in model_names))
 
     blocks = []
-    included_models: set[str] = set()
+    columns_by_model: dict[str, list[str]] = {}
 
-    for name, desc, samples in zip(model_names, descriptions, sample_blocks):
+    for name, (desc, columns), samples in zip(model_names, descriptions, sample_blocks):
         if desc:
             blocks.append(desc)
-            included_models.add(name)
+            columns_by_model[name] = columns
         if samples:
             blocks.append(samples)
 
     sample_count = sum(1 for samples in sample_blocks if samples)
     logger.info(
         "Схема собрана через wren search: %s (sample rows получены: %d/%d)",
-        [name for name in model_names if name in included_models], sample_count, len(model_names),
+        list(columns_by_model), sample_count, len(model_names),
     )
-    return "\n\n".join(blocks), included_models
+    return "\n\n".join(blocks), columns_by_model
 
 
 async def _recall_candidates(question: str) -> list[dict]:
@@ -226,21 +229,26 @@ def _format_recall_examples(examples: list[dict], included_models: set[str]) -> 
     return "\n\n".join(lines)
 
 
-async def get_schema_context(question: str) -> str:
+async def get_schema_context_with_columns(question: str) -> tuple[str, dict[str, list[str]]]:
     started_at = time.monotonic()
 
     if wren_client.is_configured():
-        (context, included_models), candidates = await asyncio.gather(
+        (context, columns_by_model), candidates = await asyncio.gather(
             _build_models_context(question),
             _recall_candidates(question),
         )
-        examples = _format_recall_examples(candidates, included_models)
+        examples = _format_recall_examples(candidates, set(columns_by_model))
     else:
-        context, _ = await _build_models_context(question)
+        context, columns_by_model = await _build_models_context(question)
         examples = ""
 
     if examples:
         context = f"{context}\n\n### {examples}"
 
     logger.info("Контекст для LLM собран за %.2fс", time.monotonic() - started_at)
+    return context, columns_by_model
+
+
+async def get_schema_context(question: str) -> str:
+    context, _ = await get_schema_context_with_columns(question)
     return context
