@@ -1,6 +1,4 @@
-import asyncio
 import asyncpg
-from asyncpg.exceptions import QueryCanceledError
 from .config import DSN, POSTGRES_POOL_MAX_SIZE, POSTGRES_POOL_MIN_SIZE, QUERY_TIMEOUT_SECONDS
 from .logging_config import logger
 
@@ -37,22 +35,6 @@ def _get_pool() -> asyncpg.Pool:
             "Postgres pool не инициализирован - init_pool() должен быть вызван при старте приложения"
         )
     return _pool
-
-
-async def run_readonly_query(sql: str) -> list[dict]:
-    pool = _get_pool()
-    try:
-        async with asyncio.timeout(QUERY_TIMEOUT_SECONDS + 2):
-            async with pool.acquire() as conn:
-                rows = await conn.fetch(sql)
-    except QueryCanceledError:
-        logger.warning("Postgres отменил запрос по statement_timeout: %s", sql)
-        raise
-    except TimeoutError:
-        logger.warning("Клиентский таймаут ожидания запроса: %s", sql)
-        raise
-
-    return [dict(row) for row in rows]
 
 
 async def run_internal_query(sql: str) -> list[dict]:

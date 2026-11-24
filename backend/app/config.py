@@ -28,7 +28,7 @@ SQL_MAX_ATTEMPTS = os.getenv("SQL_MAX_ATTEMPTS", "2")
 # --- Chart rendering ---
 CHART_RENDERER_URL = os.getenv("CHART_RENDERER_URL", "http://chart_renderer:3000")
 
-# --- Wren (опционален - если не настроен, main.py сам уходит в fallback на Postgres) ---
+# --- Wren ---
 WREN_PROJECT_DIR = os.getenv("WREN_PROJECT_DIR", "/app/wren")
 WREN_TIMEOUT_SECONDS = os.getenv("WREN_TIMEOUT_SECONDS", "20")
 WREN_CONNECTION_INFO = os.getenv("WREN_CONNECTION_INFO")    # не обязателен, см. wren_client.py

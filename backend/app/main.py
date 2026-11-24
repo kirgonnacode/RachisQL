@@ -1,4 +1,4 @@
-# --- RachisQL Версия: 0.8.1 ---
+# --- RachisQL Версия: 0.8.2 ---
 
 
 
@@ -11,12 +11,12 @@ from .auth import require_auth
 from .chart_builder import build_chart_option
 from .chart_client import ChartRenderError, render_png
 from .config import MAX_ROWS, SQL_MAX_ATTEMPTS
-from .db import check_db_connection, close_pool, init_pool, run_readonly_query
+from .db import check_db_connection, close_pool, init_pool
 from .llm_client import generate_sql, warm_up_ollama
 from .logging_config import logger
 from .models import AskRequest, AskResponse, ErrorResponse, FeedbackRequest
 from .rate_limit import RateLimitExceeded, check_rate_limit
-from .schema_context import get_schema_context_with_columns
+from .schema_context import NoRelevantModelsError, get_schema_context_with_columns
 from .sql_guard import UnsafeSQLError, sql_retry_key, validate_and_sanitize
 from .value_resolver import resolve_dictionary_values
 import asyncio
@@ -44,16 +44,16 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="RachisQL", version="0.8.1", lifespan=lifespan)
+app = FastAPI(title="RachisQL", version="0.8.2", lifespan=lifespan)
 
 app.middleware("http")(trace_request)
 
 ERROR_RESPONSES = {
     401: {"model": ErrorResponse, "description": "Нет или невалиден Bearer-токен"},
-    422: {"model": ErrorResponse, "description": "SQL отклонён guard'ом или Wren"},
+    422: {"model": ErrorResponse, "description": "Не найдены таблицы или не удалось получить корректный SQL"},
     429: {"model": ErrorResponse, "description": "Превышен лимит запросов"},
     500: {"model": ErrorResponse, "description": "Ошибка выполнения запроса"},
-    503: {"model": ErrorResponse, "description": "Ollama или Postgres временно недоступны"},
+    503: {"model": ErrorResponse, "description": "Схема данных, Wren или Ollama временно недоступны"},
 }
 
 
@@ -121,10 +121,16 @@ def _finish_attempt(sql: str, error_detail: str | None) -> tuple[str, list[dict]
 async def _generate_and_execute_sql(question: str) -> tuple[str, list[dict]]:
     try:
         schema_context, columns = await get_schema_context_with_columns(question)
+    except NoRelevantModelsError as e:
+        logger.info("Поиск таблиц: %s", e)
+        raise HTTPException(422, detail=_error(str(e))) from e
     except Exception as e:
-        logger.error("Не удалось получить схему: %s", e)
-        raise HTTPException(503, detail=_error(f"База данных временно недоступна: {e}"))
-
+        logger.exception("Не удалось загрузить схему Wren")
+        raise HTTPException(
+            503,
+            detail=_error("Не удалось загрузить схему данных. Попробуйте позже."),
+        ) from e
+    
     history: list[tuple[str, str]] = []
     outcomes: dict[tuple[bool, tuple[str, ...]], tuple[str, str | None]] = {}
     hint = ""
@@ -155,19 +161,29 @@ async def _generate_and_execute_sql(question: str) -> tuple[str, list[dict]]:
         if error is not None:
             logger.warning("Попытка %d: guard отклонил SQL: %s | причина: %s", attempt, sql, error)
             detail = f"Сгенерированный SQL отклонён guard'ом: {error}"
-        elif wren_client.is_configured():
+        else:
             try:
                 await wren_client.dry_run(sql)
             except wren_client.WrenValidationError as e:
                 error = e
                 detail = f"Запрос не соответствует модели данных (Wren): {e}"
                 logger.warning("Попытка %d: Wren dry-run отклонил SQL: %s | причина: %s", attempt, sql, e)
-            except wren_client.WrenExecutionError as e:
-                logger.warning("Wren dry-run недоступен (%s), продолжаю без семантической валидации", e)
+            except (wren_client.WrenExecutionError, wren_client.WrenNotConfiguredError) as e:
+                logger.warning("Wren dry-run недоступен: %s", e)
+                raise HTTPException(
+                    503,
+                    detail=_error("Проверка SQL временно недоступна. Попробуйте позже."),
+                ) from e
 
         if error is None:
             try:
-                rows = await _execute_sql(sql)
+                rows = await wren_client.execute(sql, limit=MAX_ROWS)
+            except wren_client.WrenNotConfiguredError as e:
+                logger.warning("Wren недоступен при выполнении SQL: %s", e)
+                raise HTTPException(
+                    503,
+                    detail=_error("Сервис временно недоступен. Попробуйте позже."),
+                ) from e
             except Exception as e:
                 error = e
                 detail = f"Ошибка выполнения запроса: {e}"
@@ -196,16 +212,6 @@ async def _generate_and_execute_sql(question: str) -> tuple[str, list[dict]]:
         outcomes[key] = outcome
 
     return _finish_attempt(*outcome)
-
-
-async def _execute_sql(sql: str) -> list[dict]:
-    if wren_client.is_configured():
-        try:
-            return await wren_client.execute(sql, limit=MAX_ROWS)
-        except wren_client.WrenExecutionError as e:
-            logger.warning("Выполнение через wren query не удалось (%s), fallback на прямой Postgres", e)
-
-    return await run_readonly_query(sql)
 
 
 @app.post("/ask", response_model=AskResponse, responses=ERROR_RESPONSES)
