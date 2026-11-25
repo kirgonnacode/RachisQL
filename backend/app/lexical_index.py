@@ -7,7 +7,8 @@ import re
 import threading
 from pathlib import Path
 import yaml
-from .config import WREN_PROJECT_DIR
+from . import category_cache
+from .config import CATEGORY_CACHE_TOP_N, WREN_PROJECT_DIR
 from .logging_config import logger
 
 _K1 = 1.2           # насыщение частоты слова: 10 повторов не в 10 раз важнее одного
@@ -32,12 +33,14 @@ def _models_dir() -> Path:
 
 def _signature() -> tuple:
     """Список файлов и время их изменения: если поменялся хоть один metadata.yml значит индекс устарел."""
-    return tuple(sorted((str(p), p.stat().st_mtime_ns) for p in _models_dir().glob("*/metadata.yml")))
+    files = tuple(sorted((str(p), p.stat().st_mtime_ns) for p in _models_dir().glob("*/metadata.yml")))
+    return files, category_cache.snapshot_version()
 
 
 def _build(signature: tuple):
     docs: dict[str, collections.Counter] = {}
     modules: dict[str, str] = {}
+    snapshot = category_cache.read_snapshot()
     for meta in sorted(_models_dir().glob("*/metadata.yml")):
         try:
             data = yaml.safe_load(meta.read_text(encoding="utf-8")) or {}
@@ -54,7 +57,14 @@ def _build(signature: tuple):
         columns = " ".join(
             str((col.get("properties") or {}).get("description") or "") for col in data.get("columns") or []
         )
-        docs[name] = collections.Counter(_stems(f"{head} {head} {columns}"))
+        counts = collections.Counter(_stems(f"{head} {head} {columns}"))
+        if (not properties.get("no_sample_rows")
+                and snapshot.get("inputs", {}).get(meta.parent.name) == meta.stat().st_mtime_ns):
+            by_column = snapshot["models"].get(meta.parent.name, {})
+            for values in by_column.values():
+                for value in values[:CATEGORY_CACHE_TOP_N]:
+                    counts.update(_stems(value))
+        docs[name] = counts
 
     n_docs = len(docs) or 1
     avg_len = (sum(sum(c.values()) for c in docs.values()) / n_docs) or 1.0

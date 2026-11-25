@@ -37,10 +37,10 @@ def _get_pool() -> asyncpg.Pool:
     return _pool
 
 
-async def run_internal_query(sql: str) -> list[dict]:
+async def run_internal_query(sql: str, *args) -> list[dict]:
     pool = _get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(sql)
+        rows = await conn.fetch(sql, *args)
     return [dict(row) for row in rows]
 
 

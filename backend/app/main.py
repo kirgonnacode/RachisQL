@@ -1,4 +1,4 @@
-# --- RachisQL Версия: 0.8.4 ---
+# --- RachisQL Версия: 0.8.5 ---
 
 
 
@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.responses import JSONResponse
-from . import wren_client, query_cache, wren_memory
+from . import category_cache, wren_client, query_cache, wren_memory
 from .auth import require_auth
 from .chart_builder import build_chart_option
 from .chart_client import ChartRenderError, render_png
@@ -31,7 +31,7 @@ _background_tasks: set[asyncio.Task] = set()
 async def lifespan(app: FastAPI):
     await init_pool()
 
-    for coro in (warm_up_ollama(), wren_memory.warm_up()):
+    for coro in (warm_up_ollama(), wren_memory.warm_up(), category_cache.refresh_loop()):
         task = asyncio.create_task(coro)
         _background_tasks.add(task)
         task.add_done_callback(_background_tasks.discard)
@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="RachisQL", version="0.8.4", lifespan=lifespan)
+app = FastAPI(title="RachisQL", version="0.8.5", lifespan=lifespan)
 
 app.middleware("http")(trace_request)
 

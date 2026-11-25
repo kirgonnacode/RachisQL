@@ -36,6 +36,8 @@ WREN_SEARCH_LIMIT = os.getenv("WREN_SEARCH_LIMIT", "200")
 WREN_SEARCH_MAX_DISTANCE = os.getenv("WREN_SEARCH_MAX_DISTANCE", "")
 WREN_SEARCH_MAX_MODELS = os.getenv("WREN_SEARCH_MAX_MODELS", "4")       # сколько лучших таблиц отдаём в LLM (защита контекста от переполнения)
 WREN_LEXICAL_WEIGHT = os.getenv("WREN_LEXICAL_WEIGHT", "3")             # вес поиска по словам в гибриде
+CATEGORY_CACHE_TOP_N = os.getenv("CATEGORY_CACHE_TOP_N", "30").strip()
+CATEGORY_CACHE_DAYS = os.getenv("CATEGORY_CACHE_DAYS", "1").strip()
 
 # --- Аутентификация ---
 TOKENS_FILE = os.getenv("TOKENS_FILE", "/app/tokens.txt")
@@ -100,6 +102,11 @@ def _validate() -> None:
         if not str(value).strip().isdigit():
             errors.append(f"{name} должен быть числом, получили: '{value}'")
 
+    for key, value in (("CATEGORY_CACHE_TOP_N", CATEGORY_CACHE_TOP_N),
+                       ("CATEGORY_CACHE_DAYS", CATEGORY_CACHE_DAYS)):
+        if not value.isascii() or not value.isdecimal() or int(value) < 1:
+            errors.append(f"{key} должен быть положительным целым числом")            
+
     if WREN_SEARCH_MAX_DISTANCE.strip():
         try:
             float(WREN_SEARCH_MAX_DISTANCE)
@@ -144,7 +151,8 @@ def _validate() -> None:
 
 _validate()
 
-
+CATEGORY_CACHE_TOP_N = int(CATEGORY_CACHE_TOP_N)
+CATEGORY_CACHE_DAYS = int(CATEGORY_CACHE_DAYS)
 POSTGRES_PORT = int(POSTGRES_PORT)
 POSTGRES_POOL_MIN_SIZE = int(POSTGRES_POOL_MIN_SIZE)
 POSTGRES_POOL_MAX_SIZE = int(POSTGRES_POOL_MAX_SIZE)
