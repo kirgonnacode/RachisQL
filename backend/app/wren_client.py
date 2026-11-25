@@ -10,6 +10,7 @@ from . import wren_memory
 from . import lexical_index
 
 _RRF_K = 10   # сглаживание рангов в гибридном поиске: разница между 1-м и 2-м местом важнее, чем между 30-м и 31-м
+_MODULE_MIN_GAP = 0.15
 
 def _connection_flags() -> list[str]:
     if not WREN_CONNECTION_INFO:
@@ -61,6 +62,43 @@ async def _run_wren(*args: str) -> tuple[int, str, str]:
     return proc.returncode, stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace")
 
 
+def _select_tables_by_module(
+    ranked: list[str],
+    scores: dict[str, float],
+    modules: dict[str, str],
+    limit: int,
+) -> list[str]:
+    baseline = ranked[:limit]
+    if not ranked:
+        return baseline
+
+    if any(name not in modules for name in ranked):
+        logger.info("Выбор модуля пропущен: есть таблицы без разметки")
+        return baseline
+
+    leader = modules[ranked[0]]
+    runner_up = next((name for name in ranked if modules[name] != leader), None)
+    if runner_up is None:
+        logger.info("Поиск таблиц: единственный модуль %s", leader)
+        return baseline
+
+    top_score = scores[ranked[0]]
+    if top_score <= 0:
+        return baseline
+
+    gap = (top_score - scores[runner_up]) / top_score
+    if gap < _MODULE_MIN_GAP:
+        logger.info(
+            "Выбор модуля неоднозначен: %s / %s, отрыв %.2f%%",
+            leader, modules[runner_up], gap * 100,
+        )
+        return baseline
+
+    selected = [name for name in ranked if modules[name] == leader][:limit]
+    logger.info("Выбран модуль %s, отрыв %.2f%%, таблицы: %s", leader, gap * 100, selected)
+    return selected
+
+
 async def fetch_relevant_models(question: str) -> list[str]:
     if not _is_configured():
         raise WrenNotConfiguredError("target/mdl.json не найден, wren context build не выполнялся")
@@ -91,10 +129,12 @@ async def fetch_relevant_models(question: str) -> list[str]:
         emb_ranked.append(name)
 
     try:
-        lex_ranked = [name for name, _ in lexical_index.rank(question)]
+        lexical, modules = lexical_index.rank_with_modules(question)
+        lex_ranked = [name for name, _ in lexical]
     except Exception as e:
         logger.warning("Лексический поиск недоступен (%s), используется только поиск по смыслу", e)
         lex_ranked = []
+        modules = {}
 
     emb_pos = {name: i + 1 for i, name in enumerate(emb_ranked)}
     lex_pos = {name: i + 1 for i, name in enumerate(lex_ranked)}
@@ -103,7 +143,8 @@ async def fetch_relevant_models(question: str) -> list[str]:
         scores[name] += 1.0 / (_RRF_K + pos)
     for name, pos in lex_pos.items():
         scores[name] += WREN_LEXICAL_WEIGHT / (_RRF_K + pos)
-    model_names = sorted(scores, key=lambda n: (-scores[n], emb_pos.get(n, 10**6)))[:WREN_SEARCH_MAX_MODELS]
+    ranked = sorted(scores, key=lambda n: (-scores[n], emb_pos.get(n, 10**6)))
+    model_names = _select_tables_by_module(ranked, scores, modules, WREN_SEARCH_MAX_MODELS)
 
     def _label(name: str) -> str:
         distance = emb_distance.get(name)

@@ -37,6 +37,7 @@ def _signature() -> tuple:
 
 def _build(signature: tuple):
     docs: dict[str, collections.Counter] = {}
+    modules: dict[str, str] = {}
     for meta in sorted(_models_dir().glob("*/metadata.yml")):
         try:
             data = yaml.safe_load(meta.read_text(encoding="utf-8")) or {}
@@ -44,7 +45,11 @@ def _build(signature: tuple):
             logger.warning("Лексический индекс: не удалось прочитать %s: %s", meta, e)
             continue
         name = data.get("name") or meta.parent.name
-        description = str((data.get("properties") or {}).get("description") or "")
+        properties = data.get("properties") or {}
+        module = properties.get("module")
+        if isinstance(module, str) and module.strip():
+            modules[name] = module.strip()
+        description = str(properties.get("description") or "")
         head = " ".join(description.split()[:_HEAD_WORDS])   # шапка: первые N слов
         columns = " ".join(
             str((col.get("properties") or {}).get("description") or "") for col in data.get("columns") or []
@@ -56,17 +61,17 @@ def _build(signature: tuple):
     df = collections.Counter(stem for counts in docs.values() for stem in counts)
     idf = {stem: math.log(1 + (n_docs - n + 0.5) / (n + 0.5)) for stem, n in df.items()}
     logger.info("Лексический индекс построен: %d таблиц, %d уникальных слов", len(docs), len(idf))
-    return signature, docs, idf, avg_len
+    return signature, docs, idf, avg_len, modules
 
 
-def rank(question: str) -> list[tuple[str, float]]:
-    """Таблицы, в которых нашлось хоть одно слово вопроса, по убыванию BM25-оценки."""
+def rank_with_modules(question: str) -> tuple[list[tuple[str, float]], dict[str, str]]:
+    """Возвращает BM25-рейтинг и модули таблиц из одного снимка индекса."""
     global _index
     with _lock:
         signature = _signature()
         if _index is None or _index[0] != signature:
             _index = _build(signature)
-        _, docs, idf, avg_len = _index
+        _, docs, idf, avg_len, modules = _index
  
     query = set(_stems(question))
     scores: dict[str, float] = {}
@@ -78,4 +83,11 @@ def rank(question: str) -> list[tuple[str, float]]:
         )
         if score > 0:
             scores[name] = score
-    return sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    return ranked, modules
+
+
+def rank(question: str) -> list[tuple[str, float]]:
+    """Возвращает таблицы по убыванию BM25-оценки."""
+    ranked, _ = rank_with_modules(question)
+    return ranked
