@@ -1,16 +1,17 @@
-# --- RachisQL Версия: 0.8.2 ---
+# --- RachisQL Версия: 0.8.3 ---
 
 
 
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.responses import JSONResponse
 from . import wren_client, query_cache, wren_memory
 from .auth import require_auth
 from .chart_builder import build_chart_option
 from .chart_client import ChartRenderError, render_png
-from .config import MAX_ROWS, SQL_MAX_ATTEMPTS
+from .config import CHART_TIMEZONE_OFFSET_HOURS, MAX_ROWS, SQL_MAX_ATTEMPTS
 from .db import check_db_connection, close_pool, init_pool
 from .llm_client import generate_sql, warm_up_ollama
 from .logging_config import logger
@@ -44,7 +45,7 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="RachisQL", version="0.8.2", lifespan=lifespan)
+app = FastAPI(title="RachisQL", version="0.8.3", lifespan=lifespan)
 
 app.middleware("http")(trace_request)
 
@@ -119,6 +120,9 @@ def _finish_attempt(sql: str, error_detail: str | None) -> tuple[str, list[dict]
 
 
 async def _generate_and_execute_sql(question: str) -> tuple[str, list[dict]]:
+    project_tz = timezone(timedelta(hours=CHART_TIMEZONE_OFFSET_HOURS))
+    request_time = datetime.now(project_tz)
+
     try:
         schema_context, columns = await get_schema_context_with_columns(question)
     except NoRelevantModelsError as e:
@@ -138,7 +142,10 @@ async def _generate_and_execute_sql(question: str) -> tuple[str, list[dict]]:
 
     for attempt in range(1, SQL_MAX_ATTEMPTS + 1):
         try:
-            raw_sql = await generate_sql(question, schema_context, history, hint)
+            raw_sql = await generate_sql(
+                question, schema_context, history, hint,
+                request_time=request_time,
+            )
         except Exception as e:
             logger.error("Не удалось сгенерировать SQL (попытка %d): %s", attempt, e)
             raise HTTPException(503, detail=_error(f"LLM временно недоступна: {e}"))

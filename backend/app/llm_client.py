@@ -1,4 +1,5 @@
 import httpx
+from datetime import datetime
 from .config import OLLAMA_MAX_TOKENS, OLLAMA_MODEL, OLLAMA_TIMEOUT_SECONDS, OLLAMA_URL, OLLAMA_NUM_CTX
 from .logging_config import logger
 import asyncio
@@ -48,13 +49,31 @@ SYSTEM_PROMPT = """Ты - генератор SQL-запросов для Postgre
 """
 
 
+WEEKDAYS_RU = (
+    "понедельник", "вторник", "среда", "четверг",
+    "пятница", "суббота", "воскресенье",
+)
+
+
 async def generate_sql(
     question: str,
     schema_context: str,
     history: list[tuple[str, str]] | None = None,
     column_hint: str = "",
+    *,
+    request_time: datetime,
 ) -> str:
-    parts = [f"Схема базы данных:\n{schema_context}", f"Вопрос пользователя: {question}"]
+    offset = request_time.strftime("%z")
+    calendar = (
+        f"Сегодня {request_time.date().isoformat()}, {WEEKDAYS_RU[request_time.weekday()]} "
+        f"(UTC{offset[:3]}:{offset[3:]}). Отсчитывай относительные периоды от этой даты. "
+        "Если пользователь явно указал дату или период, используй их."
+    )
+    parts = [
+        calendar,
+        f"Схема базы данных:\n{schema_context}",
+        f"Вопрос пользователя: {question}",
+    ]
     if history:
         for number, (sql, reason) in enumerate(history, 1):
             parts.append(f"Попытка {number}:\n{sql}\nРезультат: {reason}")

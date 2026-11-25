@@ -42,7 +42,7 @@ TOKENS_FILE = os.getenv("TOKENS_FILE", "/app/tokens.txt")
 RATE_LIMIT_PER_MINUTE = os.getenv("RATE_LIMIT_PER_MINUTE", "20")
 
 # --- Часовой пояс БД ---
-CHART_TIMEZONE_OFFSET_HOURS = os.getenv("CHART_TIMEZONE_OFFSET_HOURS", "0")
+CHART_TIMEZONE_OFFSET_HOURS = os.getenv("CHART_TIMEZONE_OFFSET_HOURS", "3")
 
 # --- Логи ---
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
