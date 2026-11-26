@@ -29,6 +29,14 @@ def _describe_model(model_name: str) -> tuple[str, list[str]]:
     table_desc = (data.get("properties") or {}).get("description", "")
     header = f"Таблица '{model_name}'" + (f" — {table_desc}" if table_desc else "") + ":"
     lines = [header]
+    properties = data.get("properties") or {}
+    period_rule = properties.get("period_rule")
+    if period_rule:
+        period_column = properties.get("period_column")
+        if period_column:
+            lines.append(f"Колонка отчётного периода: {period_column}.")
+        lines.append(f"Правило периода: {period_rule}")
+
     column_names: list[str] = []
     for col in data.get("columns", []) or []:
         col_name = col.get("name", "?")
@@ -94,7 +102,7 @@ async def _fetch_sample_rows(model_name: str) -> str:
     return "\n".join(lines)
 
 
-def _example_models(sql: str) -> set[str]:
+def referenced_models(sql: str) -> set[str]:
     try:
         statements = parse(sql, read="postgres")
         if len(statements) != 1 or not isinstance(statements[0], exp.Query):
@@ -192,7 +200,7 @@ def _format_recall_examples(examples: list[dict], included_models: set[str]) -> 
             filtered_out.append(f"{nl!r} (distance={distance:.3f})")
             continue
 
-        models = _example_models(sql)
+        models = referenced_models(sql)
         if not models:
             filtered_out.append(f"{nl!r} (таблицы не определены)")
             continue

@@ -1,6 +1,7 @@
 
 from typing import Any, Literal
 from pydantic import BaseModel, Field
+from datetime import date
 
 
 class AskRequest(BaseModel):
@@ -12,12 +13,25 @@ class AskRequest(BaseModel):
     )
 
 
+class AnswerPeriod(BaseModel):
+    model: str
+    label: str | None = None
+    status: Literal["outside", "partial", "within_bounds"]
+    requested_from: date
+    requested_to: date
+    available_from: date
+    available_to: date
+    message: str | None = None    
+
+
 class AskResponse(BaseModel):
     question: str
     generated_sql: str
     rows: list[dict[str, Any]]
     row_count: int
     query_id: str
+    period: AnswerPeriod | None = None
+    reported_period: str | None = None    
 
 
 class ErrorResponse(BaseModel):

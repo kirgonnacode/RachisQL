@@ -472,3 +472,17 @@ def build_chart_option(rows: list[dict], question: str) -> dict | None:
             option["legend"]["top"] = 28
 
     return option
+
+
+def add_period_caption(option: dict, caption: str) -> None:
+    title = option["title"]
+    title["subtext"] = caption
+    title["itemGap"] = 4
+    title["subtextStyle"] = {"fontSize": 12, "color": "#555"}
+
+    legend = option.get("legend", {})
+    if "top" in legend:
+        legend["top"] += 22
+
+    if "grid" in option:
+        option["grid"]["top"] += 22
