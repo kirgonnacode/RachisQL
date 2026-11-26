@@ -20,15 +20,24 @@ _YEAR = r"[12]\d{3}"
 _DATE = rf"\d{{1,2}}\.\d{{1,2}}(?:\.{_YEAR})?"
 _SEP = r"\s*(?:[-–—]|\bпо\b)\s*"
 
+
+_YEAR_SUFFIX = rf"(?:\s+(?:(?P<y>{_YEAR})|(?P<relative>прошлого|прошедшего|предыдущего|следующего|будущего|этого|текущего)\s+года))?"
+_ACTIVITY_CODE = re.compile(
+    r"\b(?:оквэд(?:-?2)?|вид(?:а|у)?\s+деятельности)\s*[:№]?\s*\d{2}(?:\.\d{1,2})+\b"
+)
+
+
 _RULES = {
+    "calendar_year": rf"(?:за|в)\s+(?P<y>{_YEAR})\s+год(?:у)?",
+    "calendar_day": rf"(?P<d>\d{{1,2}})\s+(?P<m>{_MONTH}){_YEAR_SUFFIX}",
     "numeric": rf"(?:с\s+)?(?P<left>{_DATE}){_SEP}(?P<right>{_DATE})",
-    "days": rf"(?:с\s+)?(?P<a>\d{{1,2}}){_SEP}(?P<b>\d{{1,2}})\s+(?P<m>{_MONTH})(?:\s+(?P<y>{_YEAR}))?",
+    "days": rf"(?:с\s+)?(?P<a>\d{{1,2}}){_SEP}(?P<b>\d{{1,2}})\s+(?P<m>{_MONTH}){_YEAR_SUFFIX}",
     "years": rf"(?P<a>{_YEAR}){_SEP}(?P<b>{_YEAR})",
-    "quarter": rf"(?:за\s+|в\s+)?(?P<q>[1-4])(?:-й|-ой)?\s+квартал(?:е)?(?:\s+(?P<y>{_YEAR}))?",
+    "quarter": rf"(?:за\s+|в\s+)?(?P<q>[1-4])(?:-й|-ой)?\s+квартал(?:е)?{_YEAR_SUFFIX}",
     "this_year": r"(?:в\s+этом|за\s+(?:этот|текущий))\s+год(?:у)?",
     "rolling": r"(?:за\s+)?последни(?:е|х|й)\s+(?P<n>\d+)\s+месяц(?:а|ев)?",
     "today": r"(?:на\s+)?сегодня",
-    "month": rf"(?:в|за)\s+(?P<m>{_MONTH})(?:\s+(?P<y>{_YEAR}))?",
+    "month": rf"(?:в|за)\s+(?P<m>{_MONTH}){_YEAR_SUFFIX}",
 }
 _PATTERNS = {
     kind: re.compile(r"(?<!\w)(?:" + rule + r")(?!\w)")
@@ -54,6 +63,16 @@ class Period:
 
 def _bounds(kind: str, fields: dict, today: date) -> Period:
     year = int(fields.get("y") or today.year)
+    relative = fields.get("relative")
+    if relative in {"прошлого", "прошедшего", "предыдущего"}:
+        year -= 1
+    elif relative in {"следующего", "будущего"}:
+        year += 1
+    if kind == "calendar_year":
+        return Period(date(year, 1, 1), date(year, 12, 31))
+    if kind == "calendar_day":
+        day = date(year, _MONTHS[fields["m"]], int(fields["d"]))
+        return Period(day, day)
     if kind == "today":
         return Period(today, today, as_of=True)
     if kind == "numeric":
@@ -81,15 +100,21 @@ def _bounds(kind: str, fields: dict, today: date) -> Period:
 
 
 def parse_period(question: str, today: date) -> Period | None:
-    text = question.casefold()
+    text = _ACTIVITY_CODE.sub(" ", question.casefold())
     matches = [(kind, match) for kind, pattern in _PATTERNS.items() for match in pattern.finditer(text)]
+
+    ranges = [match for kind, match in matches if kind == "days"]
+    matches = [(kind, match) for kind, match in matches
+               if kind != "calendar_day" or not any(
+                   span.start() <= match.start() and match.end() <= span.end() for span in ranges)]
+    
     if len(matches) != 1:
         return None
     kind, match = matches[0]
     remaining = text[:match.start()] + " " + text[match.end():]
     if re.search(rf"\b(?:{_MONTH}|{_YEAR}|вчера|завтра|сегодня)\b|\d{{1,2}}\.\d{{1,2}}", remaining):
         return None
-    if re.search(r"\b(?:до|после|кроме|ранее|позже|раньше|позднее|не)\s*$", text[:match.start()]):
+    if re.search(r"\b(?:до|после|кроме|ранее|позже|раньше|позднее|не|с|по)\s*$", text[:match.start()]):
         return None
     try:
         period = _bounds(kind, match.groupdict(), today)
