@@ -1,11 +1,11 @@
-# --- RachisQL Версия: 0.8.6 ---
+# --- RachisQL Версия: 0.8.7 ---
 
 
 
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Response
 from fastapi.responses import JSONResponse
 from . import category_cache, wren_client, query_cache, wren_memory
 from .auth import require_auth
@@ -19,19 +19,22 @@ from .llm_client import generate_sql, warm_up_ollama
 from .logging_config import logger
 from .models import AnswerPeriod, AskRequest, AskResponse, ErrorResponse, FeedbackRequest
 from .rate_limit import RateLimitExceeded, check_rate_limit
-from .schema_context import NoRelevantModelsError, get_schema_context_with_columns
+from .schema_context import NoRelevantModelsError, get_schema_context_with_module
 from .sql_guard import UnsafeSQLError, sql_retry_key, validate_and_sanitize
 from .value_resolver import resolve_dictionary_values
 import asyncio
 from .request_context import request_id
 from .tracing import trace_request
 import re
+from .semantic.shadow import load_shadow_catalog, run_shadow
 
 _background_tasks: set[asyncio.Task] = set()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_pool()
+
+    app.state.shadow_catalog = await load_shadow_catalog()
 
     for coro in (warm_up_ollama(), wren_memory.warm_up(), category_cache.refresh_loop()):
         task = asyncio.create_task(coro)
@@ -47,7 +50,7 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="RachisQL", version="0.8.6", lifespan=lifespan)
+app = FastAPI(title="RachisQL", version="0.8.7", lifespan=lifespan)
 
 app.middleware("http")(trace_request)
 
@@ -144,12 +147,14 @@ def _finish_attempt(
 
 async def _generate_and_execute_sql(
     question: str,
+    *,
+    background_tasks: BackgroundTasks | None = None,
 ) -> tuple[str, list[dict], AnswerPeriod | None]:
     project_tz = timezone(timedelta(hours=CHART_TIMEZONE_OFFSET_HOURS))
     request_time = datetime.now(project_tz)
 
     try:
-        schema_context, columns = await get_schema_context_with_columns(question)
+        schema_context, columns, selected_module = await get_schema_context_with_module(question)
     except NoRelevantModelsError as e:
         logger.info("Поиск таблиц: %s", e)
         raise HTTPException(422, detail=_error(str(e))) from e
@@ -159,6 +164,20 @@ async def _generate_and_execute_sql(
             503,
             detail=_error("Не удалось загрузить схему данных. Попробуйте позже."),
         ) from e
+
+    catalog = app.state.shadow_catalog
+    if (
+        background_tasks is not None
+        and catalog is not None
+        and selected_module == catalog.module
+    ):
+        background_tasks.add_task(
+            run_shadow,
+            catalog,
+            question,
+            request_time.date(),
+            request_id.get(),
+        )
 
     requested = parse_period(question, request_time.date())
     periods: dict[str, AnswerPeriod | None] = {}    
@@ -256,10 +275,13 @@ async def _generate_and_execute_sql(
 
 
 @app.post("/ask", response_model=AskResponse, responses=ERROR_RESPONSES)
-async def ask(request: AskRequest, consumer: str = Depends(authenticated_consumer)):
+async def ask(request: AskRequest, background_tasks: BackgroundTasks, consumer: str = Depends(authenticated_consumer)):
     logger.info("Новый вопрос от '%s': %s", consumer, request.question)
 
-    safe_sql, rows, period = await _generate_and_execute_sql(request.question)
+    safe_sql, rows, period = await _generate_and_execute_sql(
+        request.question,
+        background_tasks=background_tasks,
+    )
     rows, reported_period = split_reported_period(rows)    
     logger.info("Вопрос обработан, строк: %d", len(rows))
 
@@ -291,10 +313,13 @@ async def ask(request: AskRequest, consumer: str = Depends(authenticated_consume
     },
 )
 
-async def ask_image(request: AskRequest, consumer: str = Depends(authenticated_consumer)):
+async def ask_image(request: AskRequest, background_tasks: BackgroundTasks, consumer: str = Depends(authenticated_consumer)):
     logger.info("Новый запрос графика от '%s': %s", consumer, request.question)
 
-    safe_sql, rows, period = await _generate_and_execute_sql(request.question)
+    safe_sql, rows, period = await _generate_and_execute_sql(
+        request.question,
+        background_tasks=background_tasks,
+    )
     rows, reported_period = split_reported_period(rows)
 
     if not rows and period is not None and period.status == "outside" and period.message:

@@ -152,6 +152,37 @@ async def generate_sql(
     return raw_sql
 
 
+async def generate_structured(
+    *,
+    system: str,
+    prompt: str,
+    schema: dict,
+) -> str:
+    payload = {
+        "model": OLLAMA_MODEL,
+        "system": system,
+        "prompt": prompt,
+        "format": schema,
+        "stream": False,
+        "think": False,
+        "options": {
+            "temperature": 0.0,
+            "num_predict": OLLAMA_MAX_TOKENS,
+            "num_ctx": OLLAMA_NUM_CTX,
+        },
+    }
+
+    async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:
+        response = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
+        response.raise_for_status()
+        data = response.json()
+
+    raw = data.get("response")
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("Ollama вернула пустой структурированный ответ")
+    return raw
+
+
 async def warm_up_ollama(attempts: int = 10, delay_seconds: float = 3.0) -> None:
     payload = {
         "model": OLLAMA_MODEL,

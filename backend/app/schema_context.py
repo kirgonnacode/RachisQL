@@ -127,8 +127,10 @@ def referenced_models(sql: str) -> set[str]:
         return set()
 
 
-async def _build_models_context(question: str) -> tuple[str, dict[str, list[str]]]:
-    model_names = await wren_client.fetch_relevant_models(question)
+async def _build_models_context(
+    question: str,
+) -> tuple[str, dict[str, list[str]], str | None]:
+    model_names, selected_module = await wren_client.fetch_relevant_models_with_module(question)
     if not model_names:
         raise NoRelevantModelsError(
             "Не удалось подобрать таблицы для этого вопроса. Уточните, какие данные нужны."
@@ -165,7 +167,7 @@ async def _build_models_context(question: str) -> tuple[str, dict[str, list[str]
         "Схема собрана через wren search: %s (sample rows получены: %d/%d)",
         list(columns_by_model), sum(bool(samples) for samples in sample_blocks), len(columns_by_model),
     )
-    return "\n\n".join(blocks), columns_by_model
+    return "\n\n".join(blocks), columns_by_model, selected_module
 
 
 async def _recall_candidates(question: str) -> list[dict]:
@@ -227,13 +229,15 @@ def _format_recall_examples(examples: list[dict], included_models: set[str]) -> 
     return "\n\n".join(lines)
 
 
-async def get_schema_context_with_columns(question: str) -> tuple[str, dict[str, list[str]]]:
+async def get_schema_context_with_module(
+    question: str,
+) -> tuple[str, dict[str, list[str]], str | None]:
     started_at = time.monotonic()
 
     if not wren_client.is_configured():
         raise wren_client.WrenNotConfiguredError("Wren не настроен")
 
-    (context, columns_by_model), candidates = await asyncio.gather(
+    (context, columns_by_model, selected_module), candidates = await asyncio.gather(
         _build_models_context(question),
         _recall_candidates(question),
     )
@@ -244,7 +248,12 @@ async def get_schema_context_with_columns(question: str) -> tuple[str, dict[str,
         context = f"{context}\n\n### {examples}"
 
     logger.info("Контекст для LLM собран за %.2fс", time.monotonic() - started_at)
-    return context, columns_by_model
+    return context, columns_by_model, selected_module
+
+
+async def get_schema_context_with_columns(question: str) -> tuple[str, dict[str, list[str]]]:
+    context, columns, _ = await get_schema_context_with_module(question)
+    return context, columns
 
 
 async def get_schema_context(question: str) -> str:

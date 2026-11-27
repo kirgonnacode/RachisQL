@@ -67,24 +67,24 @@ def _select_tables_by_module(
     scores: dict[str, float],
     modules: dict[str, str],
     limit: int,
-) -> list[str]:
+) -> tuple[list[str], str | None]:
     baseline = ranked[:limit]
     if not ranked:
-        return baseline
+        return baseline, None
 
     if any(name not in modules for name in ranked):
         logger.info("Выбор модуля пропущен: есть таблицы без разметки")
-        return baseline
+        return baseline, None
 
     leader = modules[ranked[0]]
     runner_up = next((name for name in ranked if modules[name] != leader), None)
     if runner_up is None:
         logger.info("Поиск таблиц: единственный модуль %s", leader)
-        return baseline
+        return baseline, leader
 
     top_score = scores[ranked[0]]
     if top_score <= 0:
-        return baseline
+        return baseline, None
 
     gap = (top_score - scores[runner_up]) / top_score
     if gap < _MODULE_MIN_GAP:
@@ -92,14 +92,16 @@ def _select_tables_by_module(
             "Выбор модуля неоднозначен: %s / %s, отрыв %.2f%%",
             leader, modules[runner_up], gap * 100,
         )
-        return baseline
+        return baseline, None
 
     selected = [name for name in ranked if modules[name] == leader][:limit]
     logger.info("Выбран модуль %s, отрыв %.2f%%, таблицы: %s", leader, gap * 100, selected)
-    return selected
+    return selected, leader
 
 
-async def fetch_relevant_models(question: str) -> list[str]:
+async def fetch_relevant_models_with_module(
+    question: str,
+) -> tuple[list[str], str | None]:
     if not _is_configured():
         raise WrenNotConfiguredError("target/mdl.json не найден, wren context build не выполнялся")
 
@@ -144,7 +146,7 @@ async def fetch_relevant_models(question: str) -> list[str]:
     for name, pos in lex_pos.items():
         scores[name] += WREN_LEXICAL_WEIGHT / (_RRF_K + pos)
     ranked = sorted(scores, key=lambda n: (-scores[n], emb_pos.get(n, 10**6)))
-    model_names = _select_tables_by_module(ranked, scores, modules, WREN_SEARCH_MAX_MODELS)
+    model_names, selected_module = _select_tables_by_module(ranked, scores, modules, WREN_SEARCH_MAX_MODELS)
 
     def _label(name: str) -> str:
         distance = emb_distance.get(name)
@@ -156,6 +158,11 @@ async def fetch_relevant_models(question: str) -> list[str]:
         [_label(n) for n in model_names],
         f" | отфильтровано по дистанции: {filtered_out}" if filtered_out else "",
     )
+    return model_names, selected_module
+
+
+async def fetch_relevant_models(question: str) -> list[str]:
+    model_names, _ = await fetch_relevant_models_with_module(question)
     return model_names
 
 

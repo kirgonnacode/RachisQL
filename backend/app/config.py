@@ -38,6 +38,7 @@ WREN_SEARCH_MAX_MODELS = os.getenv("WREN_SEARCH_MAX_MODELS", "4")       # ско
 WREN_LEXICAL_WEIGHT = os.getenv("WREN_LEXICAL_WEIGHT", "3")             # вес поиска по словам в гибриде
 CATEGORY_CACHE_TOP_N = os.getenv("CATEGORY_CACHE_TOP_N", "30").strip()
 CATEGORY_CACHE_DAYS = os.getenv("CATEGORY_CACHE_DAYS", "1").strip()
+SEMANTIC_MODE = os.getenv("SEMANTIC_MODE", "off").strip().lower()
 
 # --- Аутентификация ---
 TOKENS_FILE = os.getenv("TOKENS_FILE", "/app/tokens.txt")
