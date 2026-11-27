@@ -5,7 +5,7 @@ from pathlib import Path
 from ..config import SEMANTIC_MODE, WREN_PROJECT_DIR
 from ..db import run_internal_query
 from ..logging_config import logger
-from .catalog import Catalog, CatalogError, MonthlyCount, load_catalogs
+from .catalog import Catalog, CatalogError, MonthlyCount, NumericAggregate, load_catalogs
 from .compiler import compile_metric
 from .planner import plan_metric
 
@@ -50,6 +50,9 @@ async def load_shadow_catalogs() -> dict[str, Catalog]:
                 if isinstance(metric, MonthlyCount):
                     required.update(metric.filters)
                     required.update(item.column for item in metric.group_by)
+                elif isinstance(metric, NumericAggregate):
+                    required.add(metric.measure.column)
+                    required.add(catalog.dimensions[metric.dimension].column)
                 else:
                     required.update(item.column for item in metric.columns)
                 missing = required - available
@@ -82,7 +85,13 @@ async def run_shadow(
         if plan is None:
             record["status"] = "unsupported"
         else:
-            query = compile_metric(catalog, plan.metric_id, plan.period)
+            query = compile_metric(
+                catalog,
+                plan.metric_id,
+                plan.period,
+                shape=plan.shape,
+                dimension_values=plan.dimension_values,
+            )
             rows = await run_internal_query(query.sql, *query.params)
             record.update(
                 status="ok",

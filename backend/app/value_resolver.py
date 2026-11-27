@@ -116,6 +116,22 @@ logger.info(
 )
 
 
+def resolve_dictionary_value(dictionary_name: str, value: str) -> str | None:
+    index = _dictionaries.get(dictionary_name)
+    if not index or not value.strip():
+        return None
+
+    match = _best_match(value, index)
+    if match is None:
+        return None
+
+    canonical, score, _ = match
+    if score < DICTIONARY_MATCH_THRESHOLD:
+        return None
+
+    return canonical
+
+
 def _strip_wildcards(value: str) -> tuple[str, str, str]:
     leading = "%" if value.startswith("%") else ""
     trailing = "%" if value.endswith("%") else ""

@@ -1,7 +1,15 @@
 from dataclasses import dataclass
 from datetime import date
 from ..dates import Period
-from .catalog import Catalog, Dataset, LatestSnapshot, MonthlyCount
+from typing import Literal
+from .catalog import (
+    Catalog,
+    Dataset,
+    DictionaryDimension,
+    LatestSnapshot,
+    MonthlyCount,
+    NumericAggregate,
+)
 
 
 class UnsupportedQuery(ValueError):
@@ -75,7 +83,69 @@ def _latest_snapshot(dataset: Dataset, metric: LatestSnapshot, period: Period) -
     return CompiledQuery(sql, (period.start, period.end))
 
 
-def compile_metric(catalog: Catalog, metric_id: str, period: Period) -> CompiledQuery:
+def _numeric_aggregate(
+    dataset: Dataset,
+    metric: NumericAggregate,
+    dimension: DictionaryDimension,
+    period: Period,
+    shape: Literal["value", "dynamics"],
+    dimension_values: tuple[str, ...],
+) -> CompiledQuery:
+    values = tuple(dict.fromkeys(dimension_values))
+    if not values or any(not value.strip() for value in values):
+        raise UnsupportedQuery("Expected at least one resolved dimension value")
+
+    if shape == "value":
+        if len(values) != 1:
+            raise UnsupportedQuery("Expected one dimension value for a scalar result")
+        if (period.start.year, period.start.month) != (period.end.year, period.end.month):
+            raise UnsupportedQuery("Expected one month for a scalar result")
+
+    time_column = _ident(dataset.time_column)
+    dimension_column = _ident(dimension.column)
+    measure_column = _ident(metric.measure.column)
+    operation = {"sum": "SUM", "avg": "AVG"}[metric.operation]
+    aggregate = f"{operation}({measure_column})"
+
+    fields: list[str] = []
+    if shape == "dynamics":
+        month = f"date_trunc('month', {time_column})::date"
+        fields.append(f"{month} AS {_ident(metric.period_label)}")
+
+    placeholders = [f"${i}::text" for i in range(3, 3 + len(values))]
+    if len(values) == 1:
+        fields.append(f"{aggregate} AS {_ident(metric.measure.label)}")
+    else:
+        labels = [dimension.display_labels.get(value, value) for value in values]
+        if len({metric.period_label, *labels}) != len(labels) + 1:
+            raise UnsupportedQuery("Duplicate output label in comparison")
+
+        for label, placeholder in zip(labels, placeholders):
+            fields.append(
+                f"{aggregate} FILTER (WHERE {dimension_column} = {placeholder}) "
+                f"AS {_ident(label)}"
+            )
+
+    sql = (
+        f"SELECT {', '.join(fields)}\n"
+        f"FROM {_table(dataset)}\n"
+        f"WHERE {_in_period(time_column)}\n"
+        f"  AND {dimension_column} IN ({', '.join(placeholders)})"
+    )
+    if shape == "dynamics":
+        sql += "\nGROUP BY 1\nORDER BY 1"
+
+    return CompiledQuery(sql, (period.start, period.end, *values))
+
+
+def compile_metric(
+    catalog: Catalog,
+    metric_id: str,
+    period: Period,
+    *,
+    shape: Literal["value", "dynamics"] | None = None,
+    dimension_values: tuple[str, ...] = (),
+) -> CompiledQuery:
     if period.as_of or period.start > period.end:
         raise UnsupportedQuery("Expected a calendar interval")
 
@@ -84,6 +154,20 @@ def compile_metric(catalog: Catalog, metric_id: str, period: Period) -> Compiled
         raise UnsupportedQuery(f"Unknown metric: {metric_id!r}")
 
     dataset = catalog.datasets[metric.dataset]
+    if isinstance(metric, NumericAggregate):
+        if shape not in ("value", "dynamics"):
+            raise UnsupportedQuery("Expected a result shape for a numeric aggregate")
+        return _numeric_aggregate(
+            dataset,
+            metric,
+            catalog.dimensions[metric.dimension],
+            period,
+            shape,
+            dimension_values,
+        )
+
+    if dimension_values:
+        raise UnsupportedQuery("This calculation does not support dimension values")
     if isinstance(metric, MonthlyCount):
         return _monthly_count(dataset, metric, period)
     if isinstance(metric, LatestSnapshot):

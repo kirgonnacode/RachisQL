@@ -1,4 +1,4 @@
-# --- RachisQL Версия: 0.8.8 ---
+# --- RachisQL Версия: 0.8.9 ---
 
 
 
@@ -50,7 +50,7 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="RachisQL", version="0.8.8", lifespan=lifespan)
+app = FastAPI(title="RachisQL", version="0.8.9", lifespan=lifespan)
 
 app.middleware("http")(trace_request)
 

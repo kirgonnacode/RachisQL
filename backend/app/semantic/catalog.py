@@ -40,6 +40,11 @@ class Column(Spec):
     label: Text
 
 
+class DictionaryDimension(Column):
+    dictionary: Text
+    display_labels: dict[Text, Text] = Field(default_factory=dict)
+    
+
 class MetricBase(Spec):
     id: Key
     name: Text
@@ -61,12 +66,23 @@ class LatestSnapshot(MetricBase):
     columns: list[Column] = Field(min_length=1)
 
 
-Metric = Annotated[MonthlyCount | LatestSnapshot, Field(discriminator="calculation")]
+class NumericAggregate(MetricBase):
+    calculation: Literal["numeric_aggregate"]
+    operation: Literal["sum", "avg"]
+    measure: Column
+    dimension: Key
+
+
+Metric = Annotated[
+    MonthlyCount | LatestSnapshot | NumericAggregate,
+    Field(discriminator="calculation"),
+]
 
 
 class Catalog(Spec):
     module: Text
     datasets: dict[Key, Dataset]
+    dimensions: dict[Key, DictionaryDimension] = Field(default_factory=dict)    
     metrics: list[Metric] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -82,6 +98,10 @@ class Catalog(Spec):
             if isinstance(metric, MonthlyCount):
                 labels.extend(item.label for item in metric.group_by)
                 labels.append(metric.value_label)
+            elif isinstance(metric, NumericAggregate):
+                if metric.dimension not in self.dimensions:
+                    raise ValueError(f"{metric.id}: unknown dimension {metric.dimension}")
+                labels.extend([self.dimensions[metric.dimension].label, metric.measure.label])                
             else:
                 labels.extend(item.label for item in metric.columns)
             if len(labels) != len(set(labels)):

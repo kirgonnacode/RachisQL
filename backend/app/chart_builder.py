@@ -407,8 +407,15 @@ def build_chart_option(rows: list[dict], question: str) -> dict | None:
 
     chart_type = "line" if category_is_timestamp and len(categories) > 15 else "bar"
 
-    series_raw_values = [[_to_json_number(row.get(col)) or 0 for row in rows] for col in numeric_cols]
-    dual_axis = _needs_dual_axis(series_raw_values)
+    series_raw_values = [
+        [_to_json_number(row[col]) if row.get(col) is not None else None for row in rows]
+        for col in numeric_cols
+    ]
+    axis_values = [
+        [value for value in values if value is not None]
+        for values in series_raw_values
+    ]
+    dual_axis = _needs_dual_axis(axis_values)
 
     if category_is_timestamp:
         x_axis_label = {"rotate": 30 if len(categories) > 8 and "\n" not in "".join(categories) else 0}
@@ -420,7 +427,10 @@ def build_chart_option(rows: list[dict], question: str) -> dict | None:
     series = []
     for i, col in enumerate(numeric_cols):
         raw_values = series_raw_values[i]
-        data_points = [_data_point(v, chart_type) for v in raw_values]
+        data_points = [
+            _data_point(value, chart_type) if value is not None else None
+            for value in raw_values
+        ]
         entry = {
             "name": _series_name(col, i),
             "type": chart_type,
@@ -443,10 +453,10 @@ def build_chart_option(rows: list[dict], question: str) -> dict | None:
                 position="left" if i == 0 else "right",
                 splitLine={"show": i == 0},
             )
-            for i, vals in enumerate(series_raw_values)
+            for i, vals in enumerate(axis_values)
         ]
     else:
-        all_values = [v for vals in series_raw_values for v in vals]
+        all_values = [v for vals in axis_values for v in vals]
         y_axis = _value_axis(all_values)   
 
     option = {
