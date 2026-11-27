@@ -5,92 +5,81 @@ from datetime import date
 from typing import Literal
 from ..dates import Period, parse_period
 from ..llm_client import generate_structured
-from .catalog import Catalog, Metric
+from .catalog import Catalog, Metric, MonthlyCount
 
 
 @dataclass(frozen=True)
-class MonthlyPlan:
-    metric: Metric
+class MetricPlan:
+    metric_id: str
     period: Period
     shape: Literal["value", "dynamics"]
 
 
 _SYSTEM = """
-Определи, можно ли полностью ответить на вопрос одной доступной метрикой.
-Метрика считает отделения в заданном статусе за каждый календарный месяц.
-Ответь JSON-объектом с полем decision.
+Выбери одну метрику каталога, если она полностью отвечает на вопрос.
+Учитывай описание, фиксированные фильтры, колонки результата и период.
+monthly_count считает строки по месяцам с указанными фильтрами и группировкой.
+latest_snapshot_per_month возвращает колонки всех строк последнего среза
+каждого месяца. Запрос распределения за год подходит, если именно такой
+помесячный результат предусмотрен описанием выбранной метрики.
 
-value — пользователь просит количество за один месяц.
-dynamics — пользователь просит показать количество отдельно по месяцам.
-unsupported — для полного ответа нужны другие данные или другой расчёт.
-
-Выбирай unsupported, если вопрос содержит дополнительное условие по району,
-причине закрытия или другому признаку, просит оба статуса, долю, сравнение,
-рейтинг, список отделений или единый итог за несколько месяцев.
-Различай состояние «закрыто» и событие «закрылось за месяц».
-Если доступная метрика отвечает только на часть вопроса, выбирай unsupported.
+Верни JSON с полями metric_id и shape. value означает результат за один
+месяц, dynamics — ряд по месяцам. Единый итог за несколько месяцев,
+новый фильтр, иной показатель или другая группировка требуют другого расчёта.
+Если ни одна метрика полностью не подходит или выбор неоднозначен,
+верни {"metric_id": null, "shape": "unsupported"}.
 """.strip()
 
-_DECISION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "decision": {
-            "type": "string",
-            "enum": ["value", "dynamics", "unsupported"],
-        }
-    },
-    "required": ["decision"],
-    "additionalProperties": False,
-}
+
+def _metric_card(metric: Metric) -> dict:
+    card = metric.model_dump(include={"id", "name", "description", "synonyms", "calculation"})
+    if isinstance(metric, MonthlyCount):
+        card["filters"] = metric.filters
+        card["group_by"] = [item.label for item in metric.group_by]
+        card["output"] = [metric.period_label, *card["group_by"], metric.value_label]
+    else:
+        card["output"] = [metric.period_label, *(item.label for item in metric.columns)]
+    return card
 
 
-async def plan_monthly_ops(
-    question: str,
-    catalog: Catalog,
-    *,
-    today: date,
-) -> MonthlyPlan | None:
-    metric = next((item for item in catalog.metrics if item.id == "ops_closed"), None)
-    if metric is None:
-        return None
-
+async def plan_metric(question: str, catalog: Catalog, *, today: date) -> MetricPlan | None:
     period = parse_period(question, today)
     if period is None or period.as_of:
         return None
-
-    last_day = monthrange(period.end.year, period.end.month)[1]
-    if period.start.day != 1 or period.end.day != last_day:
+    if period.start.day != 1 or period.end.day != monthrange(period.end.year, period.end.month)[1]:
         return None
 
+    metric_ids = [metric.id for metric in catalog.metrics]
+    schema = {
+        "type": "object",
+        "properties": {
+            "metric_id": {"enum": [*metric_ids, None]},
+            "shape": {"type": "string", "enum": ["value", "dynamics", "unsupported"]},
+        },
+        "required": ["metric_id", "shape"],
+        "additionalProperties": False,
+    }
     prompt = json.dumps(
         {
             "module": catalog.module,
-            "metric": metric.name,
-            "synonyms": metric.synonyms,
-            "filters": dict(metric.filters),
+            "metrics": [_metric_card(metric) for metric in catalog.metrics],
             "period_start": period.start.isoformat(),
             "period_end": period.end.isoformat(),
             "question": question,
         },
         ensure_ascii=False,
     )
-    raw = await generate_structured(
-        system=_SYSTEM,
-        prompt=prompt,
-        schema=_DECISION_SCHEMA,
-    )
+    raw = await generate_structured(system=_SYSTEM, prompt=prompt, schema=schema)
     result = json.loads(raw)
-    if not isinstance(result, dict) or set(result) != {"decision"}:
-        raise ValueError("Ollama вернула неожиданную структуру решения")
+    if not isinstance(result, dict) or set(result) != {"metric_id", "shape"}:
+        raise ValueError("Invalid metric decision fields")
 
-    decision = result["decision"]
-    if decision == "unsupported":
+    metric_id = result["metric_id"]
+    shape = result["shape"]
+    if metric_id is None and shape == "unsupported":
         return None
-    if decision == "dynamics":
-        return MonthlyPlan(metric, period, "dynamics")
-    if decision == "value":
-        if (period.start.year, period.start.month) != (period.end.year, period.end.month):
-            return None
-        return MonthlyPlan(metric, period, "value")
-
-    raise ValueError(f"Неизвестное решение планировщика: {decision!r}")
+    if metric_id not in metric_ids or shape not in ("value", "dynamics"):
+        raise ValueError("Invalid metric id or shape")
+    if shape == "value" and (period.start.year, period.start.month) != (period.end.year, period.end.month):
+        return None
+    return MetricPlan(metric_id, period, shape)

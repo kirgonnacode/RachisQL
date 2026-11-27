@@ -1,4 +1,4 @@
-# --- RachisQL Версия: 0.8.7 ---
+# --- RachisQL Версия: 0.8.8 ---
 
 
 
@@ -26,7 +26,7 @@ import asyncio
 from .request_context import request_id
 from .tracing import trace_request
 import re
-from .semantic.shadow import load_shadow_catalog, run_shadow
+from .semantic.shadow import load_shadow_catalogs, run_shadow
 
 _background_tasks: set[asyncio.Task] = set()
 
@@ -34,7 +34,7 @@ _background_tasks: set[asyncio.Task] = set()
 async def lifespan(app: FastAPI):
     await init_pool()
 
-    app.state.shadow_catalog = await load_shadow_catalog()
+    app.state.shadow_catalogs = await load_shadow_catalogs()
 
     for coro in (warm_up_ollama(), wren_memory.warm_up(), category_cache.refresh_loop()):
         task = asyncio.create_task(coro)
@@ -50,7 +50,7 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="RachisQL", version="0.8.7", lifespan=lifespan)
+app = FastAPI(title="RachisQL", version="0.8.8", lifespan=lifespan)
 
 app.middleware("http")(trace_request)
 
@@ -165,12 +165,8 @@ async def _generate_and_execute_sql(
             detail=_error("Не удалось загрузить схему данных. Попробуйте позже."),
         ) from e
 
-    catalog = app.state.shadow_catalog
-    if (
-        background_tasks is not None
-        and catalog is not None
-        and selected_module == catalog.module
-    ):
+    catalog = app.state.shadow_catalogs.get(selected_module)
+    if background_tasks is not None and catalog is not None:
         background_tasks.add_task(
             run_shadow,
             catalog,

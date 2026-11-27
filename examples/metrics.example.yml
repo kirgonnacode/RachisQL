@@ -1,0 +1,17 @@
+module: Склад
+datasets:
+  shipments:
+    schema: analytics
+    table: shipments
+    time_column: shipped_at
+metrics:
+  - id: monthly_shipments
+    name: Количество отгрузок по месяцам
+    dataset: shipments
+    calculation: monthly_count
+    description: Число строк со статусом «Отгружено» за календарный месяц или по месяцам.
+    filters: {status: Отгружено}
+    group_by:
+      - {column: status, label: Статус}
+    period_label: Месяц
+    value_label: Количество отгрузок

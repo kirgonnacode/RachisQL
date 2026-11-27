@@ -5,49 +5,63 @@ from pathlib import Path
 from ..config import SEMANTIC_MODE, WREN_PROJECT_DIR
 from ..db import run_internal_query
 from ..logging_config import logger
-from .catalog import Catalog, CatalogError, load_catalog
-from .compiler import compile_monthly_ops_closed
-from .planner import plan_monthly_ops
+from .catalog import Catalog, CatalogError, MonthlyCount, load_catalogs
+from .compiler import compile_metric
+from .planner import plan_metric
 
 
 _SHADOW_LOG = Path("/var/log/RachisQL/shadow.jsonl")
 
 
-async def load_shadow_catalog() -> Catalog | None:
+async def load_shadow_catalogs() -> dict[str, Catalog]:
     if SEMANTIC_MODE == "off":
-        return None
+        return {}
     if SEMANTIC_MODE != "shadow":
-        logger.warning("Неизвестный SEMANTIC_MODE=%r, теневой режим выключен", SEMANTIC_MODE)
-        return None
+        logger.warning("Unknown SEMANTIC_MODE=%r", SEMANTIC_MODE)
+        return {}
 
-    path = Path(WREN_PROJECT_DIR) / "knowledge" / "metrics" / "mail.yml"
+    directory = Path(WREN_PROJECT_DIR) / "knowledge" / "metrics"
     try:
-        catalog = load_catalog(path)
-        if catalog.module != "Почта":
-            raise CatalogError(f"Ожидался модуль Почта, получен {catalog.module!r}")
+        catalogs = load_catalogs(directory)
+    except (CatalogError, OSError):
+        logger.exception("Could not load metric catalogs from %s", directory)
+        return {}
 
-        metric = next((item for item in catalog.metrics if item.id == "ops_closed"), None)
-        if metric is None:
-            raise CatalogError("В каталоге Почты отсутствует ops_closed")
+    active = {}
+    for module, catalog in catalogs.items():
+        valid = []
+        for dataset_id, dataset in catalog.datasets.items():
+            metrics = [item for item in catalog.metrics if item.dataset == dataset_id]
+            if not metrics:
+                continue
+            try:
+                rows = await run_internal_query(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = $1 AND table_name = $2",
+                    dataset.schema_name,
+                    dataset.table,
+                )
+            except Exception:
+                logger.exception("Could not check dataset %s in module %s", dataset_id, module)
+                continue
+            available = {row["column_name"] for row in rows}
+            for metric in metrics:
+                required = {dataset.time_column}
+                if isinstance(metric, MonthlyCount):
+                    required.update(metric.filters)
+                    required.update(item.column for item in metric.group_by)
+                else:
+                    required.update(item.column for item in metric.columns)
+                missing = required - available
+                if missing:
+                    logger.warning("Skipping %s/%s: missing columns %s", module, metric.id, sorted(missing))
+                else:
+                    valid.append(metric)
+        if valid:
+            active[module] = catalog.model_copy(update={"metrics": valid})
 
-        rows = await run_internal_query(
-            """
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = $1
-            """,
-            metric.dataset.name,
-        )
-        required = {metric.dataset.time, *dict(metric.filters)}
-        missing = required - {row["column_name"] for row in rows}
-        if missing:
-            raise CatalogError(f"В {metric.dataset.name} отсутствуют колонки: {sorted(missing)}")
-    except Exception:
-        logger.exception("Теневой режим Почты недоступен")
-        return None
-
-    logger.info("Теневой режим Почты включён, каталог: %s", path)
-    return catalog
+    logger.info("Shadow catalogs active: %s", {name: len(c.metrics) for name, c in active.items()})
+    return active
 
 
 def _append_record(record: dict) -> None:
@@ -64,15 +78,15 @@ async def run_shadow(
 ) -> None:
     record = {"query_id": query_id, "module": catalog.module, "question": question}
     try:
-        plan = await plan_monthly_ops(question, catalog, today=today)
+        plan = await plan_metric(question, catalog, today=today)
         if plan is None:
             record["status"] = "unsupported"
         else:
-            query = compile_monthly_ops_closed(plan.metric, plan.period)
+            query = compile_metric(catalog, plan.metric_id, plan.period)
             rows = await run_internal_query(query.sql, *query.params)
             record.update(
                 status="ok",
-                metric=plan.metric.id,
+                metric=plan.metric_id,
                 shape=plan.shape,
                 sql=query.sql,
                 params=query.params,

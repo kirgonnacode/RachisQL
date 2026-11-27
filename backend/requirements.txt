@@ -7,3 +7,4 @@ python-dotenv==1.0.1
 pyyaml
 rapidfuzz
 pglast==7.25
+pydantic>=2,<3
